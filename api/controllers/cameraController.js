@@ -45,7 +45,7 @@ const CameraController = new class CameraController {
             cameras[i].ready = cache?.ready || false
         })
         
-        response.cameras = cameras.map(x => {
+        const output = cameras.map(x => {
             return {
                 id: x.id,
                 groupId: x.groupId,
@@ -54,6 +54,9 @@ const CameraController = new class CameraController {
                 config: canAccessConfigData ? x.config : null
             }
         })
+        
+        if (cameraId) response.camera = output[0]
+        else response.cameras = output
         
         return sendJson(response)
     }

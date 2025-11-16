@@ -14,3 +14,4 @@ web/srcprev
 bot/addons/*
 .outdated
 sync.sh
+bot/keygram

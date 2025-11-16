@@ -81,7 +81,7 @@ function nginxHandler(request) {
         }
         else if(arg[1] === 'users') {
             if (!arg[2]) return UserController.create(request)
-            else if (arg[2] === 'getOrCreate') return UserController.getOrCreate(request) // Restricted
+            else if (arg[2] === 'getOrCreate' && request.access === "ALL") return UserController.getOrCreate(request) // Restricted
         }
         else if(arg[1] === 'invites') {
             if (!arg[2]) return InviteController.create(request) // Restricted (currently)

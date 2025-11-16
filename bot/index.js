@@ -1,19 +1,15 @@
 import 'dotenv/config'
-import { Telegraf } from 'telegraf'
+import { TelegramBot } from './keygram'
+import startModule from './modules/start'
+import adminModule from './modules/admin'
+import middlewares from './modules/middlewares'
 
-import handleMessages from './handlers/handleMessages'
-import handleStart from './handlers/handleStart'
-import ArrowPanel from './utils/ArrowPanel'
+const TOKEN = process.env.BOT_TOKEN
+const bot = new TelegramBot({ token: TOKEN, signCallbacks: false })
 
-const bot = new Telegraf(process.env.BOT_TOKEN)
+middlewares.init(bot)
+startModule.init(bot)
+adminModule.init(bot)
 
-bot.on('message', handleMessages)
-bot.command('start', handleStart)
-
-bot.on('callback_query', ArrowPanel.handleAction)
-
-bot.launch()
+bot.startPolling()
 console.log('Success!\nBot initialized')
-
-process.once('SIGINT', () => bot.stop('SIGINT'))
-process.once('SIGTERM', () => bot.stop('SIGTERM'))

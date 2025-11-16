@@ -13,8 +13,7 @@ const getUser = async ctx => {
         tag: ctx.from.username || '',
     }
     
-    const response = await request(ctx, "users/getOrCreate", { method: 'POST', body })
-    return response
+    return request("users/getOrCreate", { method: 'POST', body })
 }
 
 export default getUser

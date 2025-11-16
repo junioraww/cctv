@@ -18,7 +18,6 @@ const UserController = new class UserController {
     // Создание и получение аккаунта для Telegram бота
     */
     async getOrCreate(request) {
-        if(request.access !== "ALL") return new Response()
         const { telegramId, name, tag } = await request.json()
         
         const tgAcc = await TelegramAccount.findOne({

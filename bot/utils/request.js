@@ -1,6 +1,6 @@
 const API_ROOT = process.env.API_ROOT
 
-const request = async (ctx, url, data) => {
+const request = async (url, data) => {
     try {
         const response = await fetch(API_ROOT + url, { 
             ...data,
@@ -9,10 +9,9 @@ const request = async (ctx, url, data) => {
                 'X-Secret': process.env.SECRET
             }
         });
-        return await response.json()
+        return response.json()
     } catch (e) {
         console.log(e)
-        ctx.reply(`<b>Ошибка!</b> Свяжитесь с разработчиком`)
     }
 }
 

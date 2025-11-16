@@ -1,6 +1,6 @@
 {
   "dependencies": {
     "dotenv": "^17.2.1",
-    "telegraf": "^4.16.3"
+    "keygram": "^0.2.10"
   }
 }
