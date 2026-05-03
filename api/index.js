@@ -32,13 +32,17 @@ const token = await Token.create({ name: 'bot', access: 'ALL', data: crypto.rand
 const tokens = {}
 
 const initTokens = async() => {
-    const tokensDao = await Token.findAll({ raw: true })
-    
-    tokensDao.forEach(x => { tokens[x.data] = x.access })
-    console.log("Токенов доступа:", tokensDao.length)
+    while(true) {
+        await new Promise(r => setTimeout(r, 500));
+        const tokensDao = await Token.findAll({ raw: true })
+
+        tokensDao.forEach(x => { tokens[x.data] = x.access })
+        console.log("Токенов доступа:", tokensDao.length)
+        break;
+    }
 }
 
-setTimeout(initTokens, 200)
+initTokens();
 
 function nginxHandler(request) {
     const url = new URL(request.url)

@@ -1,1 +1,70 @@
+services:
+  amnezia-wg-easy:
+    image: ghcr.io/spcfox/amnezia-wg-easy
+    container_name: amnezia-wg-easy
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ~/.amnezia-wg-easy:/etc/wireguard
+    environment:
+      - WG_HOST=${SERVER_IP}
+      - PASSWORD=${AMNEZIA_PASSWORD}
+      - WG_QUICK_USERSPACE_IMPLEMENTATION=boringtun
+      - LAN_INTERFACE=ens3
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv4.ip_forward=1
 
+  api:
+    image: oven/bun:latest
+    container_name: cctv-api
+    restart: unless-stopped
+    network_mode: host
+    working_dir: /app
+    volumes:
+      - ./api:/app
+    command: bun run --watch index.js
+    environment:
+      - PORT=3000
+      - DB_PATH=/app/database.sqlite
+    depends_on:
+      - amnezia-wg-easy
+
+  bot:
+    image: oven/bun:latest
+    container_name: cctv-bot
+    restart: unless-stopped
+    network_mode: host
+    working_dir: /app
+    volumes:
+      - ./bot:/app
+    command: bun run --watch index.js
+    environment:
+      - API_URL=http://127.0.0.1:3000
+    depends_on:
+      - api
+
+  mediamtx:
+    image: bluenviron/mediamtx
+    container_name: mediamtx
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
+    depends_on:
+      - api
+
+  #nginx:
+  #  image: nginx:alpine
+  #  container_name: cctv-web
+  #  restart: unless-stopped
+  #  network_mode: host
+  #  volumes:
+  #    - ./web/dist:/usr/share/nginx/html:ro
+  #    - ./nginx/conf.d:/etc/nginx/conf.d:ro
+  #  depends_on:
+  #    - api
