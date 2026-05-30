@@ -70,7 +70,7 @@ const UserController = new class UserController {
             where: {
                 [Sequelize.Op.or]: [
                     //{ name: username },
-                    { '$WebAccount.email$': email }
+                    { '$webAccount.email$': email }
                 ]
             },
             include: [ WebAccount ],

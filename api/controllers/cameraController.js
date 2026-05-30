@@ -156,7 +156,7 @@ const { Cam } = require('onvif/promises');
 
 
 // MediaMTX Integration
-const baseUrl = "http://localhost:9997/v3/"
+const baseUrl = "http://mediamtx:9997/v3/"
 
 // Not a single line from ChatGPT, yall hear me?
 const initMedia = async() => {
@@ -198,12 +198,15 @@ const addCamera = async camera => {
     } else {
         body.source = camera.config // URL
     }
-    await fetch(baseUrl + "config/paths/add/" + camera.name, { method: 'POST', body: JSON.stringify(body) })
+    console.log('Creating source...', camera.name)
+    await fetch(baseUrl + "config/paths/add/" + camera.name,
+        { method: 'POST', body: JSON.stringify(body) })
     console.log('Created source', camera.name)
 }
 
 const removeCamera = async camera => {
-    const resp = await fetch(baseUrl + "config/paths/delete/" + camera.name, { method: 'DELETE' })
+    const resp = await fetch(baseUrl + "config/paths/delete/" + camera.name,
+        { method: 'DELETE' })
     console.log('Deleted source', camera.name)
 }
 
@@ -215,7 +218,8 @@ const updateCamera = async camera => {
     } else {
         body.source = camera.config
     }
-    await fetch(baseUrl + "config/paths/patch/" + camera.name, { method: 'PATCH', body: JSON.stringify(body) })
+    await fetch(baseUrl + "config/paths/patch/" + camera.name,
+        { method: 'PATCH', body: JSON.stringify(body) })
     console.log('Updated source', camera.name)
 }
 
@@ -242,7 +246,8 @@ const fetchMedia = async() => {
             }
         })
         
-        const changedSources = latestSources.length === 0 ? sources : sources.filter((x, i) => x.ready !== latestSources[i]?.ready)
+        const changedSources = latestSources.length === 0 ?
+            sources : sources.filter((x, i) => x.ready !== latestSources[i]?.ready)
         
         let media;
         
@@ -266,8 +271,9 @@ const fetchMedia = async() => {
                 
                 for (const source of needRestart) {
                     const config = media.find(x => x.name === source.name)
-                    if(config) setTimeout(() => restartCamera(config), 1500)
-                    else console.error("Ошибка перезапуска источника: конфиг для", source.name, "не найден")
+                    if (config) setTimeout(() => restartCamera(config), 1500)
+                    else if (source) console.error("Ошибка перезапуска источника: конфиг для не найден", source)
+                    else console.error("Ошибка перезапуска источника: некорректный источник", source)
                 }
             }
         }
@@ -283,13 +289,16 @@ const fetchMedia = async() => {
 }
 
 if(process.env.MASTER === "true") {
-    console.log("Режим Master: настраиваем источники")
-    setInterval(initMedia, 10000)
-    await initMedia()
+    console.log('Режим Master: настройка через 5 секунд')
+    setTimeout(async () => {
+        console.log("Режим Master: настраиваем источники")
+        setInterval(initMedia, 10000)
+        await initMedia()
 
-    setInterval(fetchMedia, 1000)
-    await fetchMedia()
-    console.log("Режим Master: источники успешно настроены")
+        setInterval(fetchMedia, 1000)
+        await fetchMedia()
+        console.log("Режим Master: источники успешно настроены")
+    }, 5000);
 }
 
 

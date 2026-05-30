@@ -4,6 +4,7 @@ import { generate } from '../utils/qrController'
 import fs from 'fs'
 
 const ADMIN_ID = +process.env.ADMIN_ID
+
 const isAdmin = ctx => ctx?.user?.id === ADMIN_ID
 
 const dashboard = Panel().Text("📎 <b>Панель управления</b>")
@@ -22,18 +23,18 @@ const getCameras = async (ctx, page, groupId) => {
 }
 
 const groups = Pagination("groups").Data(getGroups)
-                                   .Keys((ctx, data) => Panel().Add(data.map(gr => [Callback(gr.name, "openGroup", gr.id)])))
-                                   .AfterKeys(ctx => Panel().Callback("➕ Создать группу", createGroup).Row()
-                                                            .Callback("Обратно", "adminDashboard"))
-                                   .Text((ctx, data, page) => `✏ <b>Группы</b> (страница ${page+1}/${ctx.maxPage})`)
+    .Keys((ctx, data) => Panel().Add(data.map(gr => [Callback(gr.name, "openGroup", gr.id)])))
+    .AfterKeys(ctx => Panel().Callback("➕ Создать группу", createGroup).Row()
+                            .Callback("Обратно", "adminDashboard"))
+    .Text((ctx, data, page) => `✏ <b>Группы</b> (страница ${page+1}/${ctx.maxPage})`)
 
 const cameras = Pagination("cameras").Data(getCameras)
-                                     .Keys((ctx, data, page, groupId) => 
-                                            Panel().Add(data.map(c => [Callback(c.name, "openCamera", groupId, c.id)])))
-                                     .AfterKeys((ctx, data, page, groupId) => 
-                                                  Panel().Callback("➕ Создать камеру", createCamera, groupId).Row()
-                                                         .Callback("Обратно", "openGroup", groupId))
-                                     .Text((ctx, data, page) => `✏ <b>Камеры группы ${ctx.groupName}</b> (страница ${page+1}/${ctx.maxPage})`)
+    .Keys((ctx, data, page, groupId) =>
+        Panel().Add(data.map(c => [Callback(c.name, "openCamera", groupId, c.id)])))
+    .AfterKeys((ctx, data, page, groupId) =>
+                Panel().Callback("➕ Создать камеру", createCamera, groupId).Row()
+                        .Callback("Обратно", "openGroup", groupId))
+    .Text((ctx, data, page) => `✏ <b>Камеры группы ${ctx.groupName}</b> (страница ${page+1}/${ctx.maxPage})`)
 
 function createGroup(ctx) {
     if (!isAdmin(ctx)) return 'onStart'

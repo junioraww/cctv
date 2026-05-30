@@ -1,70 +1,107 @@
 services:
-  amnezia-wg-easy:
-    image: ghcr.io/spcfox/amnezia-wg-easy
-    container_name: amnezia-wg-easy
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - ~/.amnezia-wg-easy:/etc/wireguard
-    environment:
-      - WG_HOST=${SERVER_IP}
-      - PASSWORD=${AMNEZIA_PASSWORD}
-      - WG_QUICK_USERSPACE_IMPLEMENTATION=boringtun
-      - LAN_INTERFACE=ens3
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    sysctls:
-      - net.ipv4.conf.all.src_valid_mark=1
-      - net.ipv4.ip_forward=1
-
   api:
     image: oven/bun:latest
     container_name: cctv-api
     restart: unless-stopped
-    network_mode: host
     working_dir: /app
     volumes:
       - ./api:/app
     command: bun run --watch index.js
     environment:
-      - PORT=3000
-      - DB_PATH=/app/database.sqlite
+      - API_PORT=${API_PORT}
+      - DATABASE_URL=postgresql://cctv:cctv_password@postgres:5432/cctv_db
+      - REDIS_URL=redis://redis:6379
+      - SECRET=${SECRET}
+      - HLS_PATH=${HLS_PATH}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN}
+      - MASTER=${MASTER}
     depends_on:
-      - amnezia-wg-easy
+      - postgres
+      - redis
+      - mediamtx
+    ports:
+      - "127.0.0.1:3033:3033"
+    networks:
+      - frontend-net
 
   bot:
     image: oven/bun:latest
     container_name: cctv-bot
     restart: unless-stopped
-    network_mode: host
     working_dir: /app
     volumes:
       - ./bot:/app
     command: bun run --watch index.js
     environment:
-      - API_URL=http://127.0.0.1:3000
+      - API_ROOT=${BOT_API_ROOT}
+      - SECRET=${BOT_SECRET}
+      - TOKEN=${BOT_TOKEN}
+      - ADMIN_ID=${INTERNAL_ADMIN_ID}
     depends_on:
       - api
+      - redis
+    networks:
+      - frontend-net
+
+  postgres:
+    image: postgres:alpine
+    container_name: cctv-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cctv
+      POSTGRES_PASSWORD: cctv_password
+      POSTGRES_DB: cctv_db
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - frontend-net
+
+  redis:
+    image: redis:alpine
+    container_name: cctv-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    networks:
+      - frontend-net
 
   mediamtx:
-    image: bluenviron/mediamtx
+    image: bluenviron/mediamtx:latest-ffmpeg
     container_name: mediamtx
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:9997:9997"
     volumes:
-      - ./mediamtx.yml:/mediamtx.yml
-    depends_on:
-      - api
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml
+    networks:
+      - vpn-net
+      - frontend-net
 
   #nginx:
   #  image: nginx:alpine
   #  container_name: cctv-web
   #  restart: unless-stopped
-  #  network_mode: host
   #  volumes:
   #    - ./web/dist:/usr/share/nginx/html:ro
-  #    - ./nginx/conf.d:/etc/nginx/conf.d:ro
+  #    - ./web/conf.d:/etc/nginx/conf.d:ro
   #  depends_on:
   #    - api
+  #  networks:
+  #    - frontend-net
+
+networks:
+  frontend-net:
+
+  vpn-net:
+    external: true
+    name: vpn_net
+
+  other_nginx:
+    external: true
+    name: smarthome_bridge
+
+volumes:
+  postgres_data:
+  redis_data:

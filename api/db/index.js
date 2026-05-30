@@ -1,5 +1,5 @@
 import { Sequelize } from '@sequelize/core'
-import { SqliteDialect } from '@sequelize/sqlite3'
+import { PostgresDialect } from '@sequelize/postgres'
 
 import User from './models/User'
 import GroupUser from './models/GroupUser'
@@ -13,27 +13,42 @@ import WebAccount from './models/WebAccount'
 import TelegramAccount from './models/TelegramAccount'
 
 const sequelize = new Sequelize({
-  dialect: SqliteDialect,
-  storage: 'database.sqlite',
-  pool: { max: 5, min: 0, idle: 10000 },
-});
+  dialect: PostgresDialect,
+  url: process.env.DATABASE_URL,
+  pool: {
+    max: 5,
+    min: 0,
+    idle: 10000,
+  },
+})
 
-const models = { User, GroupUser, Group, Camera, Invite, Session, WebAccount, TelegramAccount, Token }
+const models = {
+  User,
+  GroupUser,
+  Group,
+  Camera,
+  Invite,
+  Session,
+  WebAccount,
+  TelegramAccount,
+  Token
+}
+
 const listed = Object.values(models)
 
 // #1 Столбцы и функции
-for(const model of listed) {    
-    console.log('[DB] Иниц. таблица ' + model.name)
-	if(model.init)      model.init(sequelize)
+for (const model of listed) {
+  console.log('[DB] Иниц. таблица ' + model.name)
+  if (model.init) model.init(sequelize)
 }
 
 // #2 Связи таблиц
-for(const model of listed) {
-    console.log('[DB] Иниц. связи для ' + model.name)
-	if(model.associate) model.associate(models)
+for (const model of listed) {
+  console.log('[DB] Иниц. связи для ' + model.name)
+  if (model.associate) model.associate(models)
 }
 
 const RESET_DATABASE = false
-sequelize.sync({ force: RESET_DATABASE, alter: true })
+await sequelize.sync({ force: RESET_DATABASE, alter: true })
 
 export default sequelize

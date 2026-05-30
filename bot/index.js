@@ -4,7 +4,7 @@ import startModule from './modules/start'
 import adminModule from './modules/admin'
 import middlewares from './modules/middlewares'
 
-const TOKEN = process.env.BOT_TOKEN
+const TOKEN = process.env.TOKEN
 const bot = new TelegramBot({ token: TOKEN, signCallbacks: false })
 
 middlewares.init(bot)

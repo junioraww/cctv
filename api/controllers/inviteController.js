@@ -38,7 +38,10 @@ const InviteController = new class InviteController {
             const result = await sequelize.transaction(async (t) => {
                 const invite = await Invite.findOne({
                     where: { nonce, used: false },
-                    include: 'group',
+                    include: [{
+                        association: 'group',
+                        required: true
+                    }],
                     lock: t.LOCK.UPDATE,
                     transaction: t
                 });

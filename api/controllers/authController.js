@@ -87,8 +87,11 @@ const AuthController = new class AuthController {
         const { email, password, fingerprint } = await request.json()
         
         const user = await User.findOne({
-            where: { '$WebAccount.email$': email },
-            include: [ WebAccount ]
+            where: { '$webAccount.email$': email },
+            include: [{
+                model: WebAccount,
+                as: 'webAccount'
+            }]
         })
 
         if (!user) return sendJson({ error: 'Неверные данные' })
@@ -98,7 +101,7 @@ const AuthController = new class AuthController {
         
         return await this.createSession(user, fingerprint, request.ip)
     }
-    
+
     async logout(request, sessionId) {
         const { userId } = request;
         const canAccessAllSessions = request.access === "ALL"

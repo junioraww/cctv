@@ -15,15 +15,15 @@ import DBUtils from './utils/db'
 
 import Token from './db/models/Token'
 
-const API_PORT = 3033
-const API_REDIRECTED_BY = 'nginx'
-const MEDIA_PORT = 3034
+const API_PORT = process.env.API_PORT;
+const API_REDIRECTED_BY = 'nginx';
+const MEDIA_PORT = 3034;
 
-const authenticate = AuthController.authenticate
+const authenticate = AuthController.authenticate;
 
-/* test thing
+//test thing
 //await Token.destroy({ where: { access: 'ALL' } })
-const token = await Token.create({ name: 'bot', access: 'ALL', data: crypto.randomUUID().replace(/-/g, '') });console.log(token)*/
+/*const token = await Token.create({ name: 'bot', access: 'ALL', data: crypto.randomUUID().replace(/-/g, '') });console.log(token)*/
 
 /**
  Токены доступа для TG бота
