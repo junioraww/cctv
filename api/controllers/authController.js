@@ -192,7 +192,7 @@ const AuthController = new class AuthController {
     async allowMediaAccess(request) {
         const data = await request.json()
         // ВНИМАНИЕ! Нельзя открывать порт 8554
-        if(data.action === "publish" && data.protocol === "rtsp") return new Response("", { status: 200 })
+        if(/*data.action === "publish" && */data.protocol === "rtsp") return new Response("", { status: 200 })
         const token = data.token
         const path = data.path.split('/')
         

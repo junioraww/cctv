@@ -75,6 +75,7 @@ services:
       - "127.0.0.1:9997:9997"
     volumes:
       - ./mediamtx/mediamtx.yml:/mediamtx.yml
+      - ./timelapse:/timelapse
     networks:
       - vpn-net
       - frontend-net
