@@ -1,0 +1,109 @@
+services:
+  api:
+    image: oven/bun:latest
+    container_name: cctv-api
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./api:/app
+      - /opt/proxy/nginx/static/cambaka/41414:/var/www/html
+    command: bun run --watch index.js
+    environment:
+      - API_PORT=${API_PORT}
+      - DATABASE_URL=postgresql://cctv:cctv_password@postgres:5432/cctv_db
+      - REDIS_URL=redis://redis:6379
+      - SECRET=${SECRET}
+      - HLS_PATH=${HLS_PATH}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN}
+      - MASTER=${MASTER}
+    depends_on:
+      - postgres
+      - redis
+      - mediamtx
+    ports:
+      - "127.0.0.1:3033:3033"
+    networks:
+      - frontend-net
+
+  bot:
+    image: oven/bun:latest
+    container_name: cctv-bot
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./bot:/app
+    command: bun run --watch index.js
+    environment:
+      - API_ROOT=${BOT_API_ROOT}
+      - SECRET=${BOT_SECRET}
+      - TOKEN=${BOT_TOKEN}
+      - ADMIN_ID=${INTERNAL_ADMIN_ID}
+    depends_on:
+      - api
+      - redis
+    networks:
+      - frontend-net
+
+  postgres:
+    image: postgres:alpine
+    container_name: cctv-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cctv
+      POSTGRES_PASSWORD: cctv_password
+      POSTGRES_DB: cctv_db
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - frontend-net
+
+  redis:
+    image: redis:alpine
+    container_name: cctv-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    networks:
+      - frontend-net
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    container_name: mediamtx
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:9997:9997"
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml
+      - ./timelapse:/timelapse
+    networks:
+      - vpn-net
+      - frontend-net
+
+  #nginx:
+  #  image: nginx:alpine
+  #  container_name: cctv-web
+  #  restart: unless-stopped
+  #  volumes:
+  #    - ./web/dist:/usr/share/nginx/html:ro
+  #    - ./web/conf.d:/etc/nginx/conf.d:ro
+  #  depends_on:
+  #    - api
+  #  networks:
+  #    - frontend-net
+
+networks:
+  frontend-net:
+
+  vpn-net:
+    external: true
+    name: vpn_net
+
+  other_nginx:
+    external: true
+    name: smarthome_bridge
+
+volumes:
+  postgres_data:
+  redis_data:
