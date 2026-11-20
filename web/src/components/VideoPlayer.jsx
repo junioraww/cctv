@@ -39,7 +39,8 @@ const VideoPlayer = ({ api, ready, groupId, token, url, ptzEndpoint, isMobile })
         maxLiveSyncPlaybackRate: 1.5,
         xhrSetup: (xhr) => xhr.setRequestHeader("Authorization", "Bearer " + tokenRef.current)
       });
-      hls.loadSource(url + "/index.m3u8"); 
+      const streamSrc = `${url}/index.m3u8?token=${encodeURIComponent(tokenRef.current)}`;
+      hls.loadSource(streamSrc); 
       hls.attachMedia(videoRef.current);
       hlsRef.current = hls;
       hls.on(Hls.Events.BUFFER_CREATED, (eventName, data) => {
@@ -51,7 +52,7 @@ const VideoPlayer = ({ api, ready, groupId, token, url, ptzEndpoint, isMobile })
       });
       return () => hls.destroy();
     } else if (videoRef.current.canPlayType("application/vnd.apple.mpegurl")) {
-      videoRef.current.src = url + "/index.m3u8";
+      videoRef.current.src = `${url}/index.m3u8?token=${encodeURIComponent(tokenRef.current)}`;
     }
   }, [ url ]);
   

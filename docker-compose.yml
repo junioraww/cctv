@@ -6,19 +6,24 @@ services:
     working_dir: /app
     volumes:
       - ./api:/app
+      - avatars_data:/var/www/html/avatars
     command: bun run --watch index.js
     environment:
       - API_PORT=${API_PORT}
       - DATABASE_URL=postgresql://cctv:cctv_password@postgres:5432/cctv_db
       - REDIS_URL=redis://redis:6379
       - SECRET=${SECRET}
+      - BOT_SECRET=${BOT_SECRET}
       - HLS_PATH=${HLS_PATH}
       - COOKIE_DOMAIN=${COOKIE_DOMAIN}
       - MASTER=${MASTER}
     depends_on:
-      - postgres
-      - redis
-      - mediamtx
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mediamtx:
+        condition: service_started
     ports:
       - "127.0.0.1:3033:3033"
     networks:
@@ -53,6 +58,11 @@ services:
       POSTGRES_DB: cctv_db
     volumes:
       - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cctv -d cctv_db"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
     networks:
       - frontend-net
 
@@ -77,32 +87,28 @@ services:
       - ./mediamtx/mediamtx.yml:/mediamtx.yml
       - ./timelapse:/timelapse
     networks:
-      - vpn-net
       - frontend-net
 
-  #nginx:
-  #  image: nginx:alpine
-  #  container_name: cctv-web
-  #  restart: unless-stopped
-  #  volumes:
-  #    - ./web/dist:/usr/share/nginx/html:ro
-  #    - ./web/conf.d:/etc/nginx/conf.d:ro
-  #  depends_on:
-  #    - api
-  #  networks:
-  #    - frontend-net
+  nginx:
+    image: nginx:alpine
+    container_name: cctv-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./web/dist:/usr/share/nginx/html:ro
+      - ./web/conf.d:/etc/nginx/conf.d:ro
+      - avatars_data:/var/www/html/avatars:ro
+    depends_on:
+      - api
+      - mediamtx
+    networks:
+      - frontend-net
 
 networks:
   frontend-net:
 
-  vpn-net:
-    external: true
-    name: vpn_net
-
-  other_nginx:
-    external: true
-    name: smarthome_bridge
-
 volumes:
   postgres_data:
   redis_data:
+  avatars_data:

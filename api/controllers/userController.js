@@ -6,6 +6,7 @@ import Session from '../db/models/Session'
 import Invite from '../db/models/Invite'
 import Group from '../db/models/Group'
 import GroupUser from '../db/models/GroupUser'
+import sequelize from '../db/index'
 
 import AuthController from './authController.js'
 
@@ -51,57 +52,67 @@ const UserController = new class UserController {
     */
     async create(request) {
         const token = extractCookies(request).invite
+        if (!token) return sendJson({ error: "Кука приглашения не найдена. Пожалуйста, откройте ссылку приглашения заново." }, 400)
         
         const isValid = verify(token)
-        if (isValid === null) return sendJson({ error: "Expired Token" })
-        else if (!isValid) return sendJson({ error: "Invalid Token" })
+        if (isValid === null) return sendJson({ error: "Срок действия приглашения истек" }, 400)
+        else if (!isValid) return sendJson({ error: "Недействительный токен приглашения" }, 400)
         
-        const { inv, exp } = extract(token)
+        const { inv } = extract(token)
+        const inviteId = Number(inv)
+        if (!inviteId) return sendJson({ error: "Invalid Token" }, 400)
         
-        const invite = await Invite.findOne({
-            where: { id: inv }, raw: true
-        })
+        const { username, name, email, password, fingerprint } = await request.json()
+        if (!email || !password) return sendJson({ error: "Email and password are required" }, 400)
         
-        const { groupId } = invite
-        
-        const { username, email, password, fingerprint } = await request.json()
-        
-        const existing = await User.findOne({
-            where: {
-                [Sequelize.Op.or]: [
-                    //{ name: username },
-                    { '$webAccount.email$': email }
-                ]
-            },
-            include: [ WebAccount ],
-            raw: true
-        });
-        
-        if (existing) {
-            return sendJson({ error: 'Occupied Name/Email' });
+        try {
+            const user = await sequelize.transaction(async (t) => {
+                const invite = await Invite.findOne({
+                    where: { id: inviteId },
+                    lock: t.LOCK.UPDATE,
+                    transaction: t
+                })
+                
+                if (!invite) throw new Error('Invite not found')
+                if (invite.usedById) throw new Error('Invite already used')
+                
+                const existing = await User.findOne({
+                    where: { '$webAccount.email$': email },
+                    include: [ WebAccount ],
+                    transaction: t
+                })
+                
+                if (existing) throw new Error('Occupied Name/Email')
+                
+                const newUser = await User.create(
+                  {
+                    name: name || username || 'Пользователь',
+                    webAccount: { email, password },
+                  },
+                  {
+                    include: 'webAccount',
+                    transaction: t
+                  }
+                )
+                
+                invite.usedById = newUser.id
+                invite.used = true
+                await invite.save({ transaction: t })
+                
+                await GroupUser.create({
+                    userId: newUser.id,
+                    groupId: invite.groupId,
+                    name: 'Участник',
+                    role: 0
+                }, { transaction: t })
+                
+                return newUser
+            })
+            
+            return await AuthController.createSession(user, fingerprint, request.ip)
+        } catch (err) {
+            return sendJson({ error: err.message }, 400)
         }
-        
-        // TODO one transaction (or 1 raw request)
-        const user = await User.create(
-          {
-            name: username || 'Пользователь',
-            webAccount: { email, password },
-          },
-          {
-            include: 'webAccount',
-          }
-        );
-        
-        await Invite.update({ usedById: user.id }, { where: { id: +inv } })
-        
-        await GroupUser.create({
-            userId: user.id,
-            groupId,
-            name: 'Участник',
-            role: 0
-        })
-        
-        return await AuthController.createSession(user, fingerprint, request.ip)
     }
     
     // TODO объединить get/user и get/group в 1 запрос

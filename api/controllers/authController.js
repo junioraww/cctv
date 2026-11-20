@@ -190,30 +190,41 @@ const AuthController = new class AuthController {
     // Позволяет просматривать все видеопотоки из группы, указанной в токене
     */
     async allowMediaAccess(request) {
-        const data = await request.json()
-        // ВНИМАНИЕ! Нельзя открывать порт 8554
-        if(/*data.action === "publish" && */data.protocol === "rtsp") return new Response("", { status: 200 })
-        const token = data.token
-        const path = data.path.split('/')
-        
-        const [ groupIdStr, _unixMinute, signature ] = token.split('-')
-        if (!signature) return new Response("", { status: 403 })
-        
-        if(path[0] !== groupIdStr) {
-            console.log('Группа в токене не совпала')
+        try {
+            const data = await request.json()
+            if (!data) return new Response("", { status: 403 })
+            
+            // Allow publishing from internal network (MediaMTX source / ffmpeg)
+            if (data.action === "publish") return new Response("", { status: 200 })
+            
+            const token = data.token || (data.query ? new URLSearchParams(data.query).get('token') : null)
+            if (!token || typeof token !== 'string') return new Response("", { status: 403 })
+            
+            const pathParts = (data.path || "").split('/')
+            const [ groupIdStr, _unixMinute, signature ] = token.split('-')
+            if (!signature || !groupIdStr || !_unixMinute) return new Response("", { status: 403 })
+            
+            if (pathParts[0] !== groupIdStr) {
+                console.log('Группа в токене не совпала:', pathParts[0], 'vs', groupIdStr)
+                return new Response("", { status: 403 })
+            }
+            
+            const unixMinute = parseInt(_unixMinute, 10)
+            if (isNaN(unixMinute)) {
+                return new Response("", { status: 403 })
+            }
+            
+            // Проверка срока действия токена (окно 3 минуты для учета рассинхронизации)
+            if (Math.abs(getNow() - unixMinute) > 3) {
+                return new Response("", { status: 403 })
+            }
+            
+            const verified = verifyMediaToken(token, groupIdStr, unixMinute)
+            return new Response("", { status: verified ? 200 : 403 })
+        } catch (e) {
+            console.error("Media auth error:", e)
             return new Response("", { status: 403 })
         }
-        
-        const unixMinute = parseInt(_unixMinute, 10)
-        if (isNaN(unixMinute)) {
-            console.log('unixMinute = NaN')
-            return new Response("", { status: 403 })
-        }
-        
-        if (getNow() - _unixMinute > 2) return false
-        
-        const verified = verifyMediaToken(token, groupIdStr, unixMinute)
-        return new Response("", { status: verified ? 200 : 403 })
     }
 
     /*
@@ -276,11 +287,14 @@ const getTokenExpirations = now => {
 const sendTokens = (user, session, atea, rtea) => {
     const accessT = getTokenUntil(`usr:${user.id},ses:${session.id}`, atea)
     const refreshT = getTokenUntil("ses:" + session.id, rtea)
+    const domain = process.env.COOKIE_DOMAIN?.trim()
+    const domainAttr = (domain && !['.domain.com', 'domain.com', '.cam.lisyak.net', '.localhost'].includes(domain)) ? ` Domain=${domain};` : ''
 
     const headers = {
-            'Set-Cookie': [
-    `refreshT=${refreshT}; Path=/; Domain=${process.env.COOKIE_DOMAIN}; Secure; HttpOnly; SameSite=Strict; Max-Age=1209600;`
-    ]}
+        'Set-Cookie': [
+            `refreshT=${refreshT}; Path=/;${domainAttr} Secure; HttpOnly; SameSite=Lax; Max-Age=1209600;`
+        ]
+    }
 
     const userEnt = { id: user.id }
     

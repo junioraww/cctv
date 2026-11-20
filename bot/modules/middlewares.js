@@ -4,7 +4,10 @@ import fs from 'fs'
 
 const setUser = async ctx => {
     ctx.user = await getUser(ctx).catch(console.error)
-    if (!ctx.user) return ctx.reply(`💫 <b>Упс! Испытываем проблемы.</b>\nПожалуйста, свяжитесь с разработчиком`)
+    if (!ctx.user || ctx.user.error) {
+        console.error('[Bot Error] Failed to get user from API:', ctx.user?.error || ctx.user)
+        return ctx.reply(`💫 <b>Упс! Ошибка связи с API:</b> ${ctx.user?.error || 'не удалось загрузить пользователя'}\nПроверьте BOT_SECRET в файле .env`)
+    }
 }
 
 const states = fs.existsSync('states') ? JSON.parse(fs.readFileSync('states', 'utf-8')) : {}

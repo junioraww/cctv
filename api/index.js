@@ -29,16 +29,36 @@ const authenticate = AuthController.authenticate;
  Токены доступа для TG бота
  */
 
-const tokens = {}
+const tokens = new Map()
 
 const initTokens = async() => {
     while(true) {
-        await new Promise(r => setTimeout(r, 500));
-        const tokensDao = await Token.findAll({ raw: true })
+        try {
+            await new Promise(r => setTimeout(r, 500));
+            
+            const botSecret = process.env.BOT_SECRET || process.env.SECRET
+            if (botSecret) {
+                await Token.findOrCreate({
+                    where: { data: botSecret },
+                    defaults: { name: 'bot', access: 'ALL', data: botSecret }
+                })
+            }
+            
+            const tokensDao = await Token.findAll({ raw: true })
 
-        tokensDao.forEach(x => { tokens[x.data] = x.access })
-        console.log("Токенов доступа:", tokensDao.length)
-        break;
+            tokens.clear()
+            tokensDao.forEach(x => { tokens.set(x.data, x.access) })
+            
+            // Гарантированный доступ для секрета из окружения
+            if (process.env.SECRET) tokens.set(process.env.SECRET, 'ALL')
+            if (process.env.BOT_SECRET) tokens.set(process.env.BOT_SECRET, 'ALL')
+            
+            console.log("Токенов доступа:", tokens.size)
+            break;
+        } catch (e) {
+            console.error("Token init retry...", e.message)
+            await new Promise(r => setTimeout(r, 2000));
+        }
     }
 }
 
@@ -49,15 +69,18 @@ function nginxHandler(request) {
     const path = url.pathname
     const method = request.method
     
-    request.ip = request.headers.get("x-forwarded-for")
+    // Safely extract client IP from X-Real-IP or the last hop in X-Forwarded-For
+    const realIp = request.headers.get("x-real-ip")
+    const forwarded = request.headers.get("x-forwarded-for")
+    request.ip = realIp || (forwarded ? forwarded.split(',').pop().trim() : "127.0.0.1")
     
     console.log(method, path)
     
     /* Токены доступа */
-     const secret = request.headers.get('X-Secret')
-     if(secret) {
-         if(tokens[secret] !== undefined) request.access = tokens[secret]
-     }
+    const secret = request.headers.get('X-Secret')
+    if(secret && tokens.has(secret)) {
+        request.access = tokens.get(secret)
+    }
     /* ============== */
     
     const arg = path.split('/')
@@ -85,29 +108,46 @@ function nginxHandler(request) {
         }
         else if(arg[1] === 'users') {
             if (!arg[2]) return UserController.create(request)
-            else if (arg[2] === 'getOrCreate' && request.access === "ALL") return UserController.getOrCreate(request) // Restricted
+            else if (arg[2] === 'getOrCreate') {
+                if (request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
+                return UserController.getOrCreate(request)
+            }
         }
         else if(arg[1] === 'invites') {
-            if (!arg[2]) return InviteController.create(request) // Restricted (currently)
+            if (!arg[2]) {
+                if (request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
+                return InviteController.create(request)
+            }
             if (arg[3] === 'accept') return InviteController.accept(arg[2])
         }
         else if (arg[1] === 'groups') {
-            if (!arg[2]) return GroupController.create(request) // Restricted
-            if (arg[3] === 'users') return GroupUserController.addToGroup(request, Number(arg[2])) // Restricted
+            if (!arg[2]) {
+                if (request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
+                return GroupController.create(request)
+            }
+            if (arg[3] === 'users') {
+                if (request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
+                return GroupUserController.addToGroup(request, Number(arg[2]))
+            }
         }
         else if (arg[1] === 'cameras') {
             if (arg[3] === 'ptz') return authenticate(request, [ url, arg[2] ], CameraController.ptz)
-            else if (!arg[2]) return CameraController.create(request) // Restricted
+            else if (!arg[2]) {
+                if (request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
+                return CameraController.create(request)
+            }
         }
     }
     else if (method === 'DELETE') {
         if (arg[1] === 'cameras') {
-            if (Number(arg[2]) && !arg[3]) return CameraController.delete(request, arg[2]) // Restricted
+            if (Number(arg[2]) && !arg[3]) {
+                if (request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
+                return CameraController.delete(request, arg[2])
+            }
         }
         else if (arg[1] === 'sessions') {
             if (Number(arg[2]) && !arg[3]) return authenticate(request, Number(arg[2]), AuthController.logout)
         }
-        //else if (arg[1] === 'admin' && request.access === 'ALL') return patch(request)
     }
     else if (method === 'PATCH') {
         if (arg[1] === 'groups') {
@@ -116,7 +156,10 @@ function nginxHandler(request) {
                 else return authenticate(request, [ url, arg[2] ], GroupUserController.update)
             }
         }
-        else if (arg[1] === 'admin' && request.access === 'ALL') return DBUtils.patch(request)
+        else if (arg[1] === 'admin') {
+            if (request.access !== 'ALL') return sendJson({ error: 'No Access' }, 403)
+            return DBUtils.patch(request)
+        }
     }
     
     // TODO ratelimit if 404

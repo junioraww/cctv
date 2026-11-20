@@ -4,12 +4,10 @@ bot/cookies.txt
 **/node_modules
 **/*.sqlite
 mediamtx/mediamtx
-mediamtx/mediamtx.yml
 slave-recorder/config.toml
 slave-recorder/target
 slave-recorder/Cargo.lock
 web/stats.html
-web/src/utils/API_URL*
 web/srcprev
 bot/addons/*
 .outdated

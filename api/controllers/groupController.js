@@ -2,18 +2,21 @@ import User from '../db/models/User'
 import Group from '../db/models/Group'
 import GroupUser from '../db/models/GroupUser'
 import Camera from '../db/models/Camera'
+import WebAccount from '../db/models/WebAccount'
+import TelegramAccount from '../db/models/TelegramAccount'
 
 import redis from '../utils/redis'
 import { getMediaToken } from '../utils/tokens'
 
 const GroupController = new class GroupController {
     async create(request) {
-        if(request.access !== "ALL") return new Response()
+        if(request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
         const { name } = await request.json()
+        if (!name) return sendJson({ error: 'Name is required' }, 400)
         
         const groupEntity = await Group.create({ name })
         const group = groupEntity.get({ plain: true })
-        return new Response(JSON.stringify(group), { headers: { 'Content-Type': 'application/json' } })
+        return sendJson(group)
     }
     
     async get(request, [ url, requestedGroupId ]) {
@@ -42,9 +45,10 @@ const GroupController = new class GroupController {
                 if(group.cameras.length) {
                     const token = getMediaToken(group.id)
                     const cached = await redis.mGet(group.cameras.map(cam => `source:${group.id}/${cam.id}`))
+                    const hlsBase = (process.env.HLS_PATH || '/stream/').replace(/\/+$/, '') + '/'
                     entry.cameras = group.cameras.map((cam, i) => {
                         const media = JSON.parse(cam.media)
-                        media[0].url = process.env.HLS_PATH + group.id + '/' + cam.id
+                        media[0].url = hlsBase + group.id + '/' + cam.id
                         return { id: cam.id, name: cam.name, media, token, ready: JSON.parse(cached[i] || "{}").ready }
                     })
                 } else entry.cameras = []
@@ -75,19 +79,19 @@ const GroupController = new class GroupController {
     }
     
     async getUsers(request, [url, requestedGroupId]) {
-        if (!requestedGroupId) return sendJson({ error: 'Wrong ID' })
+        if (!requestedGroupId) return sendJson({ error: 'Wrong ID' }, 400)
         const { userId, access } = request
 
         if (access !== "ALL") {
             const groupUser = await GroupUser.findOne({ where: { userId, groupId: requestedGroupId } })
-            if (!groupUser) return sendJson({ error: 'No Access' })
+            if (!groupUser) return sendJson({ error: 'No Access' }, 403)
         }
 
         const params = url.searchParams
         const fields = params.get('fields')?.split(',')
         
         const groupUsers = await GroupUser.findAll({
-            where: { id: requestedGroupId },
+            where: { groupId: requestedGroupId },
             include: [
                 fields?.includes('accounts') && {
                     model: User,

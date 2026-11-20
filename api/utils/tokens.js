@@ -40,9 +40,11 @@ const safeEqual = (a, b) => {
 // Verify custom token
 */
 function verify(token) {
-    const [ payload, expiresAt, signature ] = token.split(".")
+    if (!token || typeof token !== 'string') return false
+    const parts = token.split(".")
+    if (parts.length !== 3) return false
     
-    return _verify(payload, expiresAt, signature)
+    return _verify(parts[0], parts[1], parts[2])
 }
 
 function _verify(payload, expiresAt, signature) {
@@ -66,9 +68,11 @@ function _verify(payload, expiresAt, signature) {
 }
 
 function verifyAndExtract(token) {
-    const [ a, b, c ] = token.split('.')
-    if(!_verify(a, b, c)) return false
-    return _extract(a, b)
+    if (!token || typeof token !== 'string') return false
+    const parts = token.split('.')
+    if (parts.length !== 3) return false
+    if(!_verify(parts[0], parts[1], parts[2])) return false
+    return _extract(parts[0], parts[1])
 }
 
 function _extract(rawPayload, expiresAt) {
@@ -86,9 +90,11 @@ function _extract(rawPayload, expiresAt) {
 }
 
 function extract(token) {
-    const [ rawPayload, expiresAt ] = token.split(".")
+    if (!token || typeof token !== 'string') return {}
+    const parts = token.split(".")
+    if (parts.length < 2) return {}
     
-    return _extract(rawPayload, expiresAt)
+    return _extract(parts[0], parts[1])
 }
 
 /*

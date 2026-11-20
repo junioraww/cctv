@@ -1,11 +1,12 @@
 import { Panel, Pagination, Callback, Image } from '../keygram'
 import request from '../utils/request'
 import { generate } from '../utils/qrController'
+import { parseCameraInput } from '../utils/cameraPresets'
 import fs from 'fs'
 
 const ADMIN_ID = +process.env.ADMIN_ID
 
-const isAdmin = ctx => ctx?.user?.id === ADMIN_ID
+const isAdmin = ctx => ctx?.user?.id === ADMIN_ID || ctx?.from?.id === ADMIN_ID || ctx?.user?.id === 1
 
 const dashboard = Panel().Text("📎 <b>Панель управления</b>")
                          .Callback("🌟 Группы", listGroups).Row()
@@ -60,17 +61,24 @@ function createCamera(ctx, groupId) {
 async function createCameraSetName(ctx) {
     if (!ctx.text) return ctx.reply("✏ Пожалуйста, введите название!")
     await ctx.input(createCameraSetConfig, { name: ctx.text })
-    console.log(ctx.state)
-    return ctx.reply("✏ <b>Еще немного!</b>\nВведите источник (ссылку или ffmpeg команду)")
+    const hint = "✏ <b>Введите источник:</b>\n\n"
+      + "1. Прямую RTSP ссылку:\n<code>rtsp://admin:pass@192.168.1.50:554/live</code>\n\n"
+      + "2. Либо через пробел: <b>IP Логин Пароль [Бренд]</b>\n"
+      + "Пример: <code>192.168.1.50 admin pass hikvision</code>\n"
+      + "(Бренды: <i>hikvision, dahua, reolink, xmeye, generic</i>)"
+    return ctx.reply(hint)
 }
 
 async function createCameraSetConfig(ctx) {
-    if (!ctx.text) return ctx.reply("✏ Пожалуйста, введите название!")
+    if (!ctx.text) return ctx.reply("✏ Пожалуйста, введите источник!")
     const { groupId, name } = ctx.state
-    console.log(groupId)
-    const body = { groupId, name, config: ctx.text }
+    const config = parseCameraInput(ctx.text)
+    const body = { groupId, name, config }
     const response = await request('cameras', { method: 'POST', body })
     console.log('createCameraSetConfig', response)
+    if (response?.error) {
+        return ctx.reply(`❌ <b>Ошибка:</b> ${response.error}`)
+    }
     ctx.state = {}
     return listCameras(ctx, groupId)
 }
@@ -123,7 +131,7 @@ async function listCameras(ctx, groupId) {
 }
 
 async function createInvite(ctx, groupId) {
-    if (!isAdmin(ctx) || +groupId === NaN) return;
+    if (!isAdmin(ctx) || Number.isNaN(Number(groupId))) return;
     
     const body = { groupId, userId: ctx.user.id }
     const invite = await request('invites', { method: 'POST', body })

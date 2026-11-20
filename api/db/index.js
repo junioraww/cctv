@@ -48,6 +48,20 @@ for (const model of listed) {
   if (model.associate) model.associate(models)
 }
 
+let retries = 15;
+while (retries > 0) {
+  try {
+    await sequelize.authenticate();
+    console.log('[DB] Подключение к PostgreSQL успешно установлено!');
+    break;
+  } catch (err) {
+    retries--;
+    console.log(`[DB] Ожидание готовности PostgreSQL (${err.message})... Осталось попыток: ${retries}`);
+    if (retries === 0) throw err;
+    await new Promise(res => setTimeout(res, 2000));
+  }
+}
+
 const RESET_DATABASE = false
 await sequelize.sync({ force: RESET_DATABASE, alter: true })
 

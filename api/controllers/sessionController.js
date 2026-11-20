@@ -17,17 +17,17 @@ const SessionController = new class SessionController {
         
         // TODO respond with cached last online
         if(!canAccessAllSessions) {
-            if(!requestedUserId) return sendJson({ error: 'No Access' })
-            const { userId } = request
+            const userId = request.userId
+            if(!userId) return sendJson({ error: 'No Access' }, 403)
             
             const user = await User.findOne({
-                where: { userId },
+                where: { id: userId },
                 include: 'sessions'
             })
             
-            if(!user) return sendJson({ error: 'No Access' })
+            if(!user) return sendJson({ error: 'No Access' }, 403)
             
-            const response = { success: true, sessions: user.sessions.map(x => {
+            const response = { success: true, sessions: (user.sessions || []).map(x => {
                 return {
                     id: x.id,
                     name: x.name,

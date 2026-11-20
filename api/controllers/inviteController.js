@@ -13,8 +13,9 @@ const InviteController = new class InviteController {
     // Link creation from bot
     */
     async create(request, isInternalRequest) {
-        if(request.access !== 'ALL') return new Response()
+        if(request.access !== 'ALL') return sendJson({ error: 'No Access' }, 403)
         const { userId, groupId } = await request.json()
+        if (!groupId) return sendJson({ error: 'groupId is required' }, 400)
         
         const nonce = crypto.getRandomValues(new Uint8Array(4))
                     .reduce((acc, byte) => acc + byte.toString(16).padStart(2, '0'), '');
@@ -27,7 +28,7 @@ const InviteController = new class InviteController {
         })
         const invite = inviteEntity.get({ plain: true })
         
-        return new Response(JSON.stringify(invite), { headers: { 'Content-Type': 'application/json' } })
+        return sendJson(invite)
     }
     
     async accept(nonce) {
@@ -58,8 +59,10 @@ const InviteController = new class InviteController {
 
             const token = getToken("inv:" + result.id, 5);
 
+            const domain = process.env.COOKIE_DOMAIN?.trim()
+            const domainAttr = (domain && !['.domain.com', 'domain.com', '.cam.lisyak.net', '.localhost'].includes(domain)) ? ` Domain=${domain};` : ''
             const headers = {
-                'Set-Cookie': `invite=${token}; Path=/; Domain=${process.env.COOKIE_DOMAIN}; Secure; HttpOnly; SameSite=Strict; Max-Age=3600;`
+                'Set-Cookie': `invite=${token}; Path=/;${domainAttr} Secure; HttpOnly; SameSite=Lax; Max-Age=3600;`
             };
 
             const group = { id: result.group.id, name: result.group.name };
