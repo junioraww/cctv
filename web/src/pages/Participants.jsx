@@ -4,20 +4,20 @@ import TimeAgo from '../utils/timeAgo'
 import styles from '../styles'
 
 export default function Participants({ users }) {
-    const sortedUsers = useMemo(() => [...users].sort((a, b) => b.lastSeen - a.lastSeen), [users]);
+    const sortedUsers = useMemo(() => {
+        return (users || [])
+            .filter(u => !u.expiresAt || new Date(u.expiresAt) > new Date())
+            .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+    }, [users]);
     
     return (
-        <div style={{maxWidth: '800px', margin: '0 auto'}}>
+        <div style={{maxWidth: '800px', margin: '0 auto', paddingBottom: '24px'}}>
             <div style={styles.card}>
                 <ul style={styles.participantList}>
                     {sortedUsers.map(({ id, name, avatar, lastSeen }) => (
                         <li key={id} style={styles.participantListItem}>
                             <div style={styles.participantAvatarContainer}>
-                                {avatar ? (
-                                    <Avatar src={avatar} alt={name}/>
-                                ) : (
-                                    <div style={styles.participantAvatarPlaceholder}>{name[0]}</div>
-                                )}
+                                <Avatar src={avatar} name={name} alt={name} size={48} />
                             </div>
                             <div>
                                 <div style={styles.participantName}>{name}</div>

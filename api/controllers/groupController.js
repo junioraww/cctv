@@ -1,3 +1,4 @@
+import { Sequelize, Op } from '@sequelize/core'
 import User from '../db/models/User'
 import Group from '../db/models/Group'
 import GroupUser from '../db/models/GroupUser'
@@ -6,7 +7,7 @@ import WebAccount from '../db/models/WebAccount'
 import TelegramAccount from '../db/models/TelegramAccount'
 
 import redis from '../utils/redis'
-import { getMediaToken } from '../utils/tokens'
+import { createMediaToken } from '../utils/tokens'
 
 const GroupController = new class GroupController {
     async create(request) {
@@ -21,11 +22,15 @@ const GroupController = new class GroupController {
     
     async get(request, [ url, requestedGroupId ]) {
         const { userId, access } = request
+        let currentGroupUser = null
 
         if (access !== "ALL") {
             if (!requestedGroupId) return sendJson({ error: 'No Access' })
-            const groupUser = await GroupUser.findOne({ where: { userId, groupId: requestedGroupId }, include: 'group' })
-            if (!groupUser) return sendJson({ error: 'No Access' })
+            currentGroupUser = await GroupUser.findOne({ where: { userId, groupId: requestedGroupId }, include: 'group' })
+            if (!currentGroupUser) return sendJson({ error: 'No Access' }, 403)
+            if (currentGroupUser.expiresAt && new Date(currentGroupUser.expiresAt) <= new Date()) {
+                return sendJson({ error: 'Срок действия доступа к группе истек', expired: true }, 403)
+            }
         }
 
         const params = url.searchParams
@@ -38,12 +43,14 @@ const GroupController = new class GroupController {
             ].filter(Boolean)
         })
 
+        const maxExpSec = currentGroupUser?.expiresAt ? Math.floor(new Date(currentGroupUser.expiresAt).getTime() / 1000) : null
+
         const result = await Promise.all(groups.map(async group => {
             const entry = { id: group.id, name: group.name }
 
             if (fields?.includes('cameras')) {
-                if(group.cameras.length) {
-                    const token = getMediaToken(group.id)
+                if(group.cameras && group.cameras.length) {
+                    const token = createMediaToken(group.id, userId, maxExpSec)
                     const cached = await redis.mGet(group.cameras.map(cam => `source:${group.id}/${cam.id}`))
                     const hlsBase = (process.env.HLS_PATH || '/stream/').replace(/\/+$/, '') + '/'
                     entry.cameras = group.cameras.map((cam, i) => {
@@ -55,16 +62,20 @@ const GroupController = new class GroupController {
             }
 
             if (fields?.includes('users')) {
-                if(group.users.length) {
-                    const cached = await redis.mGet(group.users.map(u => 'online:' + u.id))
-                    entry.users = group.users.map((u, i) => ({
-                        id: u.GroupUser.id,
-                        name: u.GroupUser.name,
-                        role: u.GroupUser.role,
-                        avatar: u.GroupUser.avatar,
-                        createdAt: u.GroupUser.createdAt,
-                        lastSeen: Number(cached[i]) || 0
-                    }))
+                if(group.users && group.users.length) {
+                    const activeUsers = group.users.filter(u => !u.GroupUser.expiresAt || new Date(u.GroupUser.expiresAt) > new Date())
+                    if (activeUsers.length) {
+                        const cached = await redis.mGet(activeUsers.map(u => 'online:' + u.id))
+                        entry.users = activeUsers.map((u, i) => ({
+                            id: u.GroupUser.id,
+                            name: u.GroupUser.name,
+                            role: u.GroupUser.role,
+                            avatar: u.GroupUser.avatar,
+                            expiresAt: u.GroupUser.expiresAt,
+                            createdAt: u.GroupUser.createdAt,
+                            lastSeen: Number(cached[i]) || 0
+                        }))
+                    } else entry.users = []
                 } else entry.users = []
             }
 
@@ -85,13 +96,22 @@ const GroupController = new class GroupController {
         if (access !== "ALL") {
             const groupUser = await GroupUser.findOne({ where: { userId, groupId: requestedGroupId } })
             if (!groupUser) return sendJson({ error: 'No Access' }, 403)
+            if (groupUser.expiresAt && new Date(groupUser.expiresAt) <= new Date()) {
+                return sendJson({ error: 'Срок действия доступа к группе истек', expired: true }, 403)
+            }
         }
 
         const params = url.searchParams
         const fields = params.get('fields')?.split(',')
         
         const groupUsers = await GroupUser.findAll({
-            where: { groupId: requestedGroupId },
+            where: {
+                groupId: requestedGroupId,
+                [Op.or]: [
+                    { expiresAt: null },
+                    { expiresAt: { [Op.gt]: new Date() } }
+                ]
+            },
             include: [
                 fields?.includes('accounts') && {
                     model: User,

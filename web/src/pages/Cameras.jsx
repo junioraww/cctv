@@ -45,7 +45,7 @@ export default function Cameras({ cameras, group, api, isMobile }) {
     }, [ selectedCount ]);
 
     return (
-        <div>
+        <div style={{ paddingBottom: isMobile ? '32px' : '48px' }}>
             <div style={{ ...styles.card, marginBottom: '24px',  }}>
                 {!isMobile && (
                     <div style={{ ...styles.flexColumnGap10, marginBottom: '24px' }}>
@@ -64,9 +64,20 @@ export default function Cameras({ cameras, group, api, isMobile }) {
                         Камеры {isMobile ? "" : `(${selectedCams.length}/${selectedCount})`}
                     </h3>
                     <div style={styles.cameraSelector}>
-                        {(cameras || []).map(({ id, name }) => (
-                            <button key={id} onClick={() => toggleCam(id)} style={{ ...styles.button, ...(selectedCams.includes(id) ? styles.buttonPrimary : styles.buttonSecondary) }}>
-                                {name}
+                        {(cameras || []).map(({ id, name, ready }) => (
+                            <button
+                                key={id}
+                                onClick={() => toggleCam(id)}
+                                style={{
+                                    ...styles.button,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    ...(selectedCams.includes(id) ? styles.buttonPrimary : styles.buttonSecondary)
+                                }}
+                            >
+                                <CameraSvgIcon ready={ready} active={selectedCams.includes(id)} />
+                                <span>{name}</span>
                             </button>
                         ))}
                     </div>
@@ -74,7 +85,7 @@ export default function Cameras({ cameras, group, api, isMobile }) {
             </div>
 
             {isMobile ? (
-                <div style={{ ...styles.mobileCameraList, ...styles.flexColumnGap10 }}>
+                <div style={{ ...styles.mobileCameraList, ...styles.flexColumnGap10, paddingBottom: '24px' }}>
                     {selectedCams.map(id => {
                         const cam = cameras.find(c => c.id === id);
                         if (!cam) return null;
@@ -103,5 +114,17 @@ export default function Cameras({ cameras, group, api, isMobile }) {
                 </div>
             )}
         </div>
+    );
+}
+
+function CameraSvgIcon({ ready, active }) {
+    return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <path d="M23 7l-7 5 7 5V7z"></path>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+            {ready !== undefined && (
+                <circle cx="5" cy="9" r="1.5" fill={ready ? "#48bb78" : "#f56565"} stroke="none" />
+            )}
+        </svg>
     );
 }

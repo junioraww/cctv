@@ -6,7 +6,9 @@ export default class Invite extends Model {
 			id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
 			nonce: { type: DataTypes.STRING, allowNull: false, unique: true },
 			used: { type: DataTypes.BOOLEAN, defaultValue: false },
-      expiresAt: { type: DataTypes.INTEGER, allowNull: false },
+			isTemporary: { type: DataTypes.BOOLEAN, defaultValue: false },
+			durationMinutes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
+			expiresAt: { type: DataTypes.INTEGER, allowNull: false },
 		}, {
 			sequelize,
 			modelName: 'Invite',

@@ -52,12 +52,16 @@ export default function Dashboard({ users, cameras }) {
       return dayQuotes[Math.floor(Math.random() * dayQuotes.length)]
   }, [])
   
-  const recent10m = users?.filter(u => now - +u.lastSeen < 10*60) ?? []
-  const recent1d  = users?.filter(u => now - +u.lastSeen < 24*60*60) ?? []
-  const newUsers  = users?.filter(u => now - +u.createdAt < 24*60*60) ?? []
+  const activeUsers = useMemo(() => {
+      return (users || []).filter(u => !u.expiresAt || new Date(u.expiresAt) > new Date())
+  }, [ users ])
+
+  const recent10m = activeUsers.filter(u => now - +u.lastSeen < 10*60)
+  const recent1d  = activeUsers.filter(u => now - +u.lastSeen < 24*60*60)
+  const newUsers  = activeUsers.filter(u => now - +u.createdAt < 24*60*60)
 
   return (
-        <div>
+        <div style={{ paddingBottom: '24px' }}>
             <h3 style={{ ... styles.h3, zIndex: 1, position: 'relative', marginBottom: '30px' }}>{ quote }</h3>
             <div style={styles.dashboardGrid}>
                 <div style={styles.card}>

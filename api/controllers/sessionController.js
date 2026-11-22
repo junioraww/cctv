@@ -4,7 +4,6 @@ import Invite from '../db/models/Invite'
 import Camera from '../db/models/Camera'
 import GroupUser from '../db/models/GroupUser'
 import Group from '../db/models/Group'
-import { getToken } from '../utils/tokens'
 import sequelize from '../db/index'
 import redis from '../utils/redis'
 

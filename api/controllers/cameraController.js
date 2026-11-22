@@ -5,25 +5,45 @@ import Invite from '../db/models/Invite'
 import Camera from '../db/models/Camera'
 import GroupUser from '../db/models/GroupUser'
 import Group from '../db/models/Group'
-import { getToken } from '../utils/tokens'
 import sequelize from '../db/index'
 import redis from '../utils/redis'
+import { broadcastToGroup } from '../utils/ws'
 
-function validateAndSanitizeConfig(config) {
+function validateAndSanitizeConfig(config, alwaysReady = false) {
     if (!config || typeof config !== 'string') {
         throw new Error('Config must be a non-empty string')
     }
     const trimmed = config.trim()
     // Direct stream URL (RTSP / RTMP / HTTP with query params allowed)
     if (/^(rtsp|rtsps|rtmp|rtmps|http|https):\/\/[^\s"';`|\\]+$/i.test(trimmed)) {
-        return { source: trimmed }
+        return {
+            source: trimmed,
+            sourceOnDemand: !alwaysReady,
+            ...(alwaysReady ? {} : {
+                sourceOnDemandStartTimeout: "10s",
+                sourceOnDemandCloseAfter: "10s"
+            })
+        }
     }
     // FFmpeg command - strictly disallow shell chaining & subshells, allow $MTX_PATH
     if (trimmed.startsWith('ffmpeg')) {
         if (/[;&|`<>\\!]/.test(trimmed) || /\$(?!MTX_[A-Z0-9_]+)/.test(trimmed)) {
             throw new Error('Security Error: Shell operators are not allowed in camera config')
         }
-        return { runOnInit: trimmed, runOnInitRestart: true }
+        if (alwaysReady) {
+            return {
+                runOnInit: trimmed,
+                runOnInitRestart: true,
+                runOnDemand: ""
+            }
+        } else {
+            return {
+                runOnDemand: trimmed,
+                runOnDemandStartTimeout: "10s",
+                runOnDemandCloseAfter: "10s",
+                runOnInit: ""
+            }
+        }
     }
     throw new Error('Invalid source: must be rtsp://, rtmp://, http:// URL or safe ffmpeg command')
 }
@@ -46,6 +66,9 @@ const CameraController = new class CameraController {
             })
             
             if(!groupUser) return sendJson({ error: 'No Access' }, 403)
+            if(groupUser.expiresAt && new Date(groupUser.expiresAt) <= new Date()) {
+                return sendJson({ error: 'Срок действия доступа истек' }, 403)
+            }
         }
         
         const response = { success: true }
@@ -72,6 +95,7 @@ const CameraController = new class CameraController {
                 groupId: x.groupId,
                 name: x.name,
                 media: x.media,
+                alwaysReady: Boolean(x.alwaysReady),
                 config: canAccessConfigData ? x.config : null
             }
         })
@@ -85,10 +109,11 @@ const CameraController = new class CameraController {
     async create(request, args) {
         if(request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
         try {
-            const { groupId, name, config } = await request.json()
+            const { groupId, name, config, alwaysReady } = await request.json()
             if (!groupId || !name || !config) return sendJson({ error: 'Missing required fields' }, 400)
             
-            const mediaConfig = validateAndSanitizeConfig(config)
+            const isAlwaysReady = Boolean(alwaysReady)
+            const mediaConfig = validateAndSanitizeConfig(config, isAlwaysReady)
             
             // TODO поддержка dash, webrtc
             const media = JSON.stringify([
@@ -102,22 +127,43 @@ const CameraController = new class CameraController {
                 name: String(name).trim(),
                 media,
                 config: config.trim(),
+                alwaysReady: isAlwaysReady,
                 groupId: Number(groupId)
             })
             
             const mediaName = groupId + '/' + camera.id
-            const body = {
-                sourceOnDemand: false,
-                ...mediaConfig
-            }
-            
-            await fetch(baseUrl + "config/paths/add/" + mediaName, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            })
+            await addOrUpdateCamera({ name: mediaName, config: camera.config, alwaysReady: camera.alwaysReady })
             
             return sendJson(camera.dataValues)
+        } catch (err) {
+            return sendJson({ error: err.message }, 400)
+        }
+    }
+
+    async update(request, [ url, cameraId ]) {
+        if(request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
+        try {
+            const camera = await Camera.findOne({ where: { id: cameraId }, include: 'group' })
+            if (!camera) return sendJson({ error: 'Not Found' }, 404)
+
+            const body = await request.json()
+            if (body.alwaysReady !== undefined) {
+                camera.alwaysReady = Boolean(body.alwaysReady)
+            }
+            if (body.name !== undefined) {
+                camera.name = String(body.name).trim()
+            }
+            if (body.config !== undefined) {
+                camera.config = String(body.config).trim()
+            }
+            await camera.save()
+
+            if (camera.group) {
+                const pathName = camera.group.id + '/' + camera.id
+                await addOrUpdateCamera({ name: pathName, config: camera.config, alwaysReady: camera.alwaysReady })
+            }
+
+            return sendJson({ success: true, camera: camera.dataValues })
         } catch (err) {
             return sendJson({ error: err.message }, 400)
         }
@@ -129,7 +175,9 @@ const CameraController = new class CameraController {
         if (!camera) return sendJson({ error: 'Not Found' }, 404)
         
         await camera.destroy()
-        await fetch(baseUrl + "config/paths/delete/" + camera.group.id + '/' + camera.id, { method: 'DELETE' })
+        if (camera.group) {
+            await removeCamera({ name: camera.group.id + '/' + camera.id })
+        }
         return sendJson({ success: true })
     }
     
@@ -153,7 +201,10 @@ const CameraController = new class CameraController {
             }
         });
         
-        if(!groupUser) return sendJson({ error: 'No Access' })
+        if(!groupUser) return sendJson({ error: 'No Access' }, 403)
+        if(groupUser.expiresAt && new Date(groupUser.expiresAt) <= new Date()) {
+            return sendJson({ error: 'Срок действия доступа истек' }, 403)
+        }
         
         const velocity = {
             x: action === 'left' ? -0.1 : action === 'right' ? 0.1 : 0,
@@ -190,6 +241,13 @@ const baseUrl = "http://mediamtx:9997/v3/"
 
 const initMedia = async() => {
     try {
+        // Ensure MediaMTX has hlsAlwaysRemux enabled globally without restarting
+        await fetch(baseUrl + "config/global/patch", {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hlsAlwaysRemux: true })
+        }).catch(() => {})
+
         const response = await fetch(baseUrl + "config/paths/list")
         if (!response.ok) return
         const paths = await response.json()
@@ -201,7 +259,7 @@ const initMedia = async() => {
         for (const cam of dbCameras) {
             const pathName = cam.group.id + '/' + cam.id
             dbCameraMap.set(pathName, cam)
-            await addOrUpdateCamera({ name: pathName, config: cam.config })
+            await addOrUpdateCamera({ name: pathName, config: cam.config, alwaysReady: cam.alwaysReady })
         }
         
         // Remove orphan paths in MediaMTX that are not in DB
@@ -217,26 +275,44 @@ const initMedia = async() => {
 
 const addOrUpdateCamera = async camera => {
     try {
-        const mediaConfig = validateAndSanitizeConfig(camera.config)
+        const mediaConfig = validateAndSanitizeConfig(camera.config, camera.alwaysReady)
+        const encodedName = encodeURIComponent(camera.name)
         const body = {
-            sourceOnDemand: false,
+            name: camera.name,
             ...mediaConfig
         }
-        // Try to patch existing path in MediaMTX
-        const patchRes = await fetch(baseUrl + "config/paths/patch/" + camera.name, {
+        // 1. Try to patch existing path in MediaMTX
+        const patchRes = await fetch(baseUrl + "config/paths/patch/" + encodedName, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         })
-        if (!patchRes.ok) {
-            // If it doesn't exist yet, add it
-            await fetch(baseUrl + "config/paths/add/" + camera.name, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            })
+        if (patchRes.ok) {
+            console.log(`[MediaMTX] Patched source ${camera.name} (alwaysReady: ${Boolean(camera.alwaysReady)})`)
+            return
         }
-        console.log('Configured source', camera.name)
+        // 2. If it doesn't exist yet, add it
+        const addRes = await fetch(baseUrl + "config/paths/add/" + encodedName, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+        if (addRes.ok) {
+            console.log(`[MediaMTX] Added source ${camera.name} (alwaysReady: ${Boolean(camera.alwaysReady)})`)
+            return
+        }
+        // 3. Fallback: try replace
+        const replaceRes = await fetch(baseUrl + "config/paths/replace/" + encodedName, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+        if (replaceRes.ok) {
+            console.log(`[MediaMTX] Replaced source ${camera.name} (alwaysReady: ${Boolean(camera.alwaysReady)})`)
+            return
+        }
+        const errText = await patchRes.text().catch(() => '')
+        console.error(`[MediaMTX] Failed to configure ${camera.name} (${encodedName}): status=${patchRes.status} ${errText}`)
     } catch(e) {
         console.error('Failed to configure camera:', camera.name, e.message)
     }
@@ -244,8 +320,9 @@ const addOrUpdateCamera = async camera => {
 
 const removeCamera = async camera => {
     try {
-        await fetch(baseUrl + "config/paths/delete/" + camera.name, { method: 'DELETE' })
-        console.log('Deleted source', camera.name)
+        const encodedName = encodeURIComponent(camera.name)
+        await fetch(baseUrl + "config/paths/delete/" + encodedName, { method: 'DELETE' })
+        console.log('[MediaMTX] Deleted source', camera.name)
     } catch(e) {
         console.error('Failed to remove camera:', camera.name, e.message)
     }
@@ -269,12 +346,28 @@ const fetchMedia = async() => {
         for (const source of sources) {
             const data = JSON.stringify({ ready: source.ready })
             await redis.set('source:' + source.name, data)
+
+            const prev = latestSources.find(s => s.name === source.name)
+            if (!prev || prev.ready !== source.ready) {
+                const parts = (source.name || '').split('/')
+                if (parts.length === 2) {
+                    const gId = Number(parts[0])
+                    const cId = Number(parts[1])
+                    if (gId && cId) {
+                        broadcastToGroup(gId, 'camera:status', { cameraId: cId, ready: Boolean(source.ready) })
+                    }
+                }
+            }
         }
         latestSources = sources
     } catch (e) {
         for(const source of latestSources) {
             const data = JSON.stringify({ ready: false })
             await redis.set('source:' + source.name, data)
+            const parts = (source.name || '').split('/')
+            if (parts.length === 2) {
+                broadcastToGroup(Number(parts[0]), 'camera:status', { cameraId: Number(parts[1]), ready: false })
+            }
         }
         latestSources = []
         console.error(e)

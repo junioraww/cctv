@@ -7,6 +7,7 @@ export default class Camera extends Model {
 			media: { type: DataTypes.STRING, defaultValue: '[]', allowNull: false },
       config: { type: DataTypes.STRING, allowNull: false },
       name: { type: DataTypes.STRING, allowNull: false },
+      alwaysReady: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
 		}, {
 			sequelize,
 			modelName: 'Camera',

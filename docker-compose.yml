@@ -42,6 +42,7 @@ services:
       - SECRET=${BOT_SECRET}
       - TOKEN=${BOT_TOKEN}
       - ADMIN_ID=${INTERNAL_ADMIN_ID}
+      - INVITE_DOMAIN=${INVITE_DOMAIN:-voice-chat.lisyak.net}
     depends_on:
       - api
       - redis

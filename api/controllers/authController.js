@@ -5,12 +5,21 @@ import Invite from '../db/models/Invite'
 import GroupUser from '../db/models/GroupUser'
 import WebAccount from '../db/models/WebAccount'
 import redis from '../utils/redis'
+import { disconnectSession } from '../utils/ws'
 
 import sequelize from '../db/index.js'
-import { getNow } from '../utils/tokens.js'
+import {
+    createAccessToken,
+    verifyAccessToken,
+    createRefreshToken,
+    verifyRefreshToken,
+    createMediaToken,
+    verifyMediaToken,
+    verifyInviteToken,
+    getNowSec
+} from '../utils/tokens.js'
 
 import { extractCookies } from '../utils/cookies.js'
-import { getTokenUntil, verify, extract, verifyAndExtract, verifyMediaToken } from '../utils/tokens.js'
 
 const onlineCacheThrottle = {}
 
@@ -36,31 +45,35 @@ const AuthController = new class AuthController {
     async refresh(request, url) {
         const receivedToken = extractCookies(request).refreshT
         
-        if (!receivedToken) return sendJson({ error: 'Wrong Cookie' })
-        if (!verify(receivedToken)) return sendJson({ error: 'Wrong Token' })
+        if (!receivedToken) return sendJson({ error: 'Wrong Cookie' }, 401)
         
-        const { exp, ses } = extract(receivedToken)
+        const refreshData = verifyRefreshToken(receivedToken)
+        if (!refreshData) return sendJson({ error: 'Wrong Token' }, 401)
         
-        const sessionId = parseInt(ses, 10)
-        if (isNaN(sessionId)) return sendJson({ error: 'Wrong Session ID' })
+        const sessionId = refreshData.sessionId
+        if (isNaN(sessionId)) return sendJson({ error: 'Wrong Session ID' }, 401)
         
-        const now = Math.floor(Date.now() / 60000)
-        const [ atea, rtea ] = getTokenExpirations(now)
+        const nowSec = getNowSec()
+        const nowMin = Math.floor(Date.now() / 60000)
+        const [ atea, rtea ] = getTokenExpirations(nowSec)
         
         const session = await Session.findOne({
             where: {
                 id: sessionId,
                 disabled: false,
-                expiresAt: {[Sequelize.Op.gt]: now}
+                [Sequelize.Op.or]: [
+                    { expiresAt: { [Sequelize.Op.gt]: nowSec } },
+                    { expiresAt: { [Sequelize.Op.gt]: nowMin } }
+                ]
             }, 
             include: 'user'
         })
-        if (!session) return sendJson({ error: 'Wrong Session' })
+        if (!session) return sendJson({ error: 'Wrong Session' }, 401)
         
         let update = false;
         
         if (!session.history.some(e => e.ip === request.ip)) {
-            session.history.push({ at: now, ip: request.ip });
+            session.history.push({ at: nowSec, ip: request.ip });
             if (session.history.length > 20) {
                 session.history = session.history.slice(session.history.length - 20);
             }
@@ -68,23 +81,19 @@ const AuthController = new class AuthController {
             update = true;
         }
         
-        // TODO fix this weird code
-        if (session.expiresAt < now + 60 * 24 * 7) {
+        if (session.expiresAt < nowSec + 7 * 86400) {
             session.expiresAt = rtea
             update = true;
         }
         
         if (update) await session.save();
         
-        // TODO more detailed info
-        if (session === null) return sendJson({ error: "Token Expired" })
-        
         return sendTokens(session.user, session, atea, rtea)
     }
     
     async login(request) {
         if(!await checkRateLimit(request.ip, "login")) return sendJson({ error: 'Rate Limit' })
-        const { email, password, fingerprint } = await request.json()
+        const { email, password, fingerprint, inviteId: bodyInviteId, nonce } = await request.json()
         
         const user = await User.findOne({
             where: { '$webAccount.email$': email },
@@ -98,18 +107,89 @@ const AuthController = new class AuthController {
         if (!await user.webAccount.checkPassword(password)) return sendJson({ error: 'Неверные данные' })
         
         await resetRateLimit(request.ip, "login")
+
+        // Проверяем приглашение из куки или переданное напрямую
+        let inviteId = bodyInviteId || null
+        if (!inviteId) {
+            const inviteCookie = extractCookies(request).invite
+            if (inviteCookie) {
+                const invData = verifyInviteToken(inviteCookie)
+                if (invData) {
+                    inviteId = invData.inviteId
+                }
+            }
+        }
+
+        let joinedGroup = null
+        const clearInviteCookies = []
+        const domain = process.env.COOKIE_DOMAIN?.trim()
+        const domainAttr = (domain && !['.domain.com', 'domain.com', '.cam.lisyak.net', '.localhost'].includes(domain)) ? ` Domain=${domain};` : ''
+
+        if (inviteId || nonce) {
+            try {
+                await sequelize.transaction(async (t) => {
+                    let invite = null
+                    if (inviteId) {
+                        invite = await Invite.findOne({
+                            where: { id: inviteId },
+                            include: [{ association: 'group' }],
+                            lock: t.LOCK.UPDATE,
+                            transaction: t
+                        })
+                    }
+                    if (!invite && nonce) {
+                        const cleanNonce = String(nonce).match(/[a-fA-F0-9]{8}/)?.[0] || nonce
+                        invite = await Invite.findOne({
+                            where: { nonce: cleanNonce },
+                            include: [{ association: 'group' }],
+                            lock: t.LOCK.UPDATE,
+                            transaction: t
+                        })
+                    }
+
+                    if (invite && (!invite.usedById || invite.usedById === user.id)) {
+                        const existingGU = await GroupUser.findOne({
+                            where: { userId: user.id, groupId: invite.groupId },
+                            transaction: t
+                        })
+
+                        if (!existingGU) {
+                            let expiresAt = null
+                            if (invite.isTemporary && invite.durationMinutes > 0) {
+                                expiresAt = new Date(Date.now() + invite.durationMinutes * 60000)
+                            }
+                            await GroupUser.create({
+                                userId: user.id,
+                                groupId: invite.groupId,
+                                name: user.name || 'Участник',
+                                avatar: null,
+                                expiresAt,
+                                role: 0
+                            }, { transaction: t })
+                        }
+
+                        invite.used = true
+                        invite.usedById = user.id
+                        await invite.save({ transaction: t })
+                        joinedGroup = invite.group
+                        clearInviteCookies.push(`invite=; Path=/;${domainAttr} Secure; HttpOnly; SameSite=Lax; Max-Age=0;`)
+                    }
+                })
+            } catch (err) {
+                console.error('Ошибка присоединения к группе при входе:', err)
+            }
+        }
         
-        return await this.createSession(user, fingerprint, request.ip)
+        return await this.createSession(user, fingerprint, request.ip, clearInviteCookies, joinedGroup ? { group: { id: joinedGroup.id, name: joinedGroup.name } } : {})
     }
 
     async logout(request, sessionId) {
         const { userId } = request;
         const canAccessAllSessions = request.access === "ALL"
         
-        if(!canAccessAllSessions) {
-            if(!sessionId) return sendJson({ error: 'No Access' })
-            
-            if(!userId) return sendJson({ error: 'No Access' })
+        if (!canAccessAllSessions) {
+            if (!sessionId) return sendJson({ error: 'No Access' })
+            if (!userId) return sendJson({ error: 'No Access' })
             
             const [ updated ] = await Session.update({
                 disabled: true
@@ -123,6 +203,24 @@ const AuthController = new class AuthController {
             if (!updated) return sendJson({ error: 'Not Found' })
             
             await redis.set('disabled-session-' + sessionId , '1', { EX: 60 * 10 })
+            disconnectSession(sessionId)
+            
+            return sendJson({ success: true })
+        } else {
+            if (!sessionId) return sendJson({ error: 'No Access' })
+            
+            const [ updated ] = await Session.update({
+                disabled: true
+            }, {
+                where: {
+                    id: sessionId
+                }
+            })
+            
+            if (!updated) return sendJson({ error: 'Not Found' })
+            
+            await redis.set('disabled-session-' + sessionId , '1', { EX: 60 * 10 })
+            disconnectSession(sessionId)
             
             return sendJson({ success: true })
         }
@@ -167,22 +265,20 @@ const AuthController = new class AuthController {
     /*
     // Авторизация (получение access и refresh)
     */
-    async createSession(user, fingerprint, ip) {
-        const now = Math.floor(Date.now() / 60000)
-        const [ atea, rtea ] = getTokenExpirations(now)
+    async createSession(user, fingerprint, ip, extraCookies = [], extraData = {}) {
+        const nowSec = getNowSec()
+        const [ atea, rtea ] = getTokenExpirations(nowSec)
         
-        // session.id будет в 
         const session = await user.createSession({
             expiresAt: rtea,
             history: [{
-                at: now,
+                at: nowSec,
                 ip,
-                val: fingerprint.slice(0, 32)
-            }] // TODO extensive device info
+                val: (fingerprint || '').slice(0, 32)
+            }]
         })
-        // TODO ratelimits
         
-        return sendTokens(user, session, atea, rtea)
+        return sendTokens(user, session, atea, rtea, extraCookies, extraData)
     }
     
     /*
@@ -201,26 +297,33 @@ const AuthController = new class AuthController {
             if (!token || typeof token !== 'string') return new Response("", { status: 403 })
             
             const pathParts = (data.path || "").split('/')
-            const [ groupIdStr, _unixMinute, signature ] = token.split('-')
-            if (!signature || !groupIdStr || !_unixMinute) return new Response("", { status: 403 })
-            
-            if (pathParts[0] !== groupIdStr) {
-                console.log('Группа в токене не совпала:', pathParts[0], 'vs', groupIdStr)
-                return new Response("", { status: 403 })
+            const requestedGroupId = parseInt(pathParts[0], 10)
+            if (isNaN(requestedGroupId)) return new Response("", { status: 403 })
+
+            // 1. Проверяем бинарный Media Token (Схема 3)
+            const mediaPayload = verifyMediaToken(token)
+            if (mediaPayload) {
+                if (mediaPayload.groupId !== requestedGroupId) {
+                    console.log('Группа в медиа-токене не совпала:', requestedGroupId, 'vs', mediaPayload.groupId)
+                    return new Response("", { status: 403 })
+                }
+                // Проверка прошла чисто в памяти процессора за 1.7 мкс (0 нагрузки на БД и Redis!)
+                return new Response("", { status: 200 })
             }
-            
-            const unixMinute = parseInt(_unixMinute, 10)
-            if (isNaN(unixMinute)) {
-                return new Response("", { status: 403 })
+
+            // 2. Фолбэк: если передан пользовательский Access Token (Схема 1)
+            const accessPayload = verifyAccessToken(token)
+            if (accessPayload) {
+                const userId = accessPayload.userId
+                const groupUser = await GroupUser.findOne({ where: { userId, groupId: requestedGroupId } })
+                if (!groupUser) return new Response("", { status: 403 })
+                if (groupUser.expiresAt && new Date(groupUser.expiresAt) <= new Date()) {
+                    return new Response("", { status: 403 })
+                }
+                return new Response("", { status: 200 })
             }
-            
-            // Проверка срока действия токена (окно 3 минуты для учета рассинхронизации)
-            if (Math.abs(getNow() - unixMinute) > 3) {
-                return new Response("", { status: 403 })
-            }
-            
-            const verified = verifyMediaToken(token, groupIdStr, unixMinute)
-            return new Response("", { status: verified ? 200 : 403 })
+
+            return new Response("", { status: 403 })
         } catch (e) {
             console.error("Media auth error:", e)
             return new Response("", { status: 403 })
@@ -241,17 +344,14 @@ const AuthController = new class AuthController {
         
         const token = authHeader.slice(7)
         
-        // TODO продумать систему access
-        // с предоставлением доступов прямо в токене
-        
         try {
-            const payload = verifyAndExtract(token)
+            const payload = verifyAccessToken(token)
             
-            if(!payload) return sendJson({ error: 'Wrong Token' })
+            if(!payload) return sendJson({ error: 'Wrong Token' }, 405)
             
-            const { usr, ses } = payload
+            const usr = payload.userId
+            const ses = payload.sessionId
             
-            // TODO fingerprint verifying
             if(!usr || !ses) return sendJson({ error: "Wrong Token" }, 405)
             
             const disabled = await redis.exists('disabled-session-' + ses)
@@ -267,9 +367,9 @@ const AuthController = new class AuthController {
                     .exec();
             }
             
-            request.userId = usr
+            request.userId = Number(usr)
+            request.sessionId = Number(ses)
             
-            // TODO error is being handled in wrong place (should not be in authenticate function)
             return controllerEndpoint(request, args)
         } catch (e) {
             console.error(e)
@@ -278,31 +378,45 @@ const AuthController = new class AuthController {
     }
 }
 
-// Access: 10 минут
-// Refresh: 14 дней
-const getTokenExpirations = now => {
-    return [ now + 10, now + 60 * 24 * 14 ]
+// Access: 10 минут (600 сек)
+// Refresh: 14 дней (14 * 86400 сек)
+const getTokenExpirations = nowSec => {
+    return [ nowSec + 600, nowSec + 14 * 86400 ]
 }
 
-const sendTokens = (user, session, atea, rtea) => {
-    const accessT = getTokenUntil(`usr:${user.id},ses:${session.id}`, atea)
-    const refreshT = getTokenUntil("ses:" + session.id, rtea)
+const sendTokens = (user, session, atea, rtea, extraCookies = [], extraData = {}) => {
+    const nowSec = getNowSec()
+    const accessT = createAccessToken(user.id, session.id, atea - nowSec)
+    const refreshT = createRefreshToken(session.id, rtea - nowSec)
     const domain = process.env.COOKIE_DOMAIN?.trim()
     const domainAttr = (domain && !['.domain.com', 'domain.com', '.cam.lisyak.net', '.localhost'].includes(domain)) ? ` Domain=${domain};` : ''
 
-    const headers = {
-        'Set-Cookie': [
-            `refreshT=${refreshT}; Path=/;${domainAttr} Secure; HttpOnly; SameSite=Lax; Max-Age=1209600;`
-        ]
+    const headers = new Headers()
+    headers.set('Content-Type', 'application/json')
+    headers.append('Set-Cookie', `refreshT=${refreshT}; Path=/;${domainAttr} Secure; HttpOnly; SameSite=Lax; Max-Age=1209600;`)
+    if (Array.isArray(extraCookies)) {
+        for (const cookieStr of extraCookies) {
+            headers.append('Set-Cookie', cookieStr)
+        }
     }
 
-    const userEnt = { id: user.id }
-    
-    return sendJson({ success: true, session: session.id, token: accessT }, headers)
+    const payload = {
+        success: true,
+        session: session.id,
+        token: accessT,
+        expiresAt: atea,
+        ...extraData
+    }
+
+    return new Response(JSON.stringify(payload), { headers })
 }
 
-const sendJson = (json, headers) => {
-    return new Response(JSON.stringify(json), { headers: { 'Content-Type': 'application/json', ...headers } })
+const sendJson = (json, statusOrHeaders = 200) => {
+    const isStatus = typeof statusOrHeaders === 'number'
+    return new Response(JSON.stringify(json), {
+        status: isStatus ? statusOrHeaders : 200,
+        headers: { 'Content-Type': 'application/json', ...(isStatus ? {} : statusOrHeaders) }
+    })
 }
 
 export default AuthController

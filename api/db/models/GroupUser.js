@@ -7,6 +7,7 @@ export default class GroupUser extends Model {
         role: { type: DataTypes.INTEGER, defaultValue: 0 },
         name: { type: DataTypes.STRING, allowNull: false },
         avatar: { type: DataTypes.STRING, allowNull: true },
+        expiresAt: { type: DataTypes.DATE, allowNull: true, defaultValue: null },
         createdAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW }
 		}, {
 			  sequelize,

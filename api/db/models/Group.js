@@ -13,8 +13,8 @@ export default class Group extends Model {
 	}
 	
 	static associate(models) {
-		    Group.belongsToMany(models.User, { through: models.GroupUser, as: 'users', foreignKey: 'groupId', otherKey: 'userId' })
-        Group.hasMany(models.Camera, { foreignKey: 'groupId' })
-        Group.hasMany(models.Invite, { foreignKey: 'groupId' })
+		Group.belongsToMany(models.User, { through: models.GroupUser, as: 'users', foreignKey: 'groupId', otherKey: 'userId' })
+        Group.hasMany(models.Camera, { foreignKey: 'groupId', as: 'cameras' })
+        Group.hasMany(models.Invite, { foreignKey: 'groupId', as: 'invites' })
 	}
 }

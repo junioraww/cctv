@@ -1,4 +1,6 @@
 import { Sequelize, Transaction, Op } from '@sequelize/core'
+import fs from 'node:fs'
+import path from 'node:path'
 import User from '../db/models/User'
 import WebAccount from '../db/models/WebAccount'
 import TelegramAccount from '../db/models/TelegramAccount'
@@ -11,7 +13,7 @@ import sequelize from '../db/index'
 import AuthController from './authController.js'
 
 import redis from '../utils/redis'
-import { getToken, verify, extract } from '../utils/tokens.js'
+import { verifyInviteToken } from '../utils/tokens.js'
 import { extractCookies } from '../utils/cookies.js'
 
 const UserController = new class UserController {
@@ -54,16 +56,40 @@ const UserController = new class UserController {
         const token = extractCookies(request).invite
         if (!token) return sendJson({ error: "Кука приглашения не найдена. Пожалуйста, откройте ссылку приглашения заново." }, 400)
         
-        const isValid = verify(token)
-        if (isValid === null) return sendJson({ error: "Срок действия приглашения истек" }, 400)
-        else if (!isValid) return sendJson({ error: "Недействительный токен приглашения" }, 400)
+        const inviteData = verifyInviteToken(token)
+        if (!inviteData) return sendJson({ error: "Срок действия приглашения истек или токен недействителен" }, 400)
         
-        const { inv } = extract(token)
-        const inviteId = Number(inv)
+        const inviteId = inviteData.inviteId
         if (!inviteId) return sendJson({ error: "Invalid Token" }, 400)
         
-        const { username, name, email, password, fingerprint } = await request.json()
+        const { username, name, email, password, fingerprint, avatar } = await request.json()
         if (!email || !password) return sendJson({ error: "Email and password are required" }, 400)
+        
+        const displayName = (name || username || '').trim() || 'Пользователь'
+
+        let savedAvatar = null
+        if (avatar && typeof avatar === 'string' && avatar.startsWith('data:image')) {
+            try {
+                const parts = avatar.split(',')
+                const meta = parts[0]
+                const base64Data = parts[1]
+                let ext = '.jpeg'
+                if (meta.includes('png')) ext = '.png'
+                else if (meta.includes('webp')) ext = '.webp'
+                
+                const buffer = Buffer.from(base64Data, 'base64')
+                if (buffer.length <= 512 * 1024) {
+                    const filename = `${crypto.randomUUID()}${ext}`
+                    const UPLOAD_DIR = process.env.UPLOAD_DIR || "/var/www/html/avatars"
+                    fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+                    const filePath = path.join(UPLOAD_DIR, filename)
+                    await Bun.write(filePath, buffer)
+                    savedAvatar = `/avatars/${filename}`
+                }
+            } catch (err) {
+                console.error('Ошибка сохранения аватара при регистрации:', err)
+            }
+        }
         
         try {
             const user = await sequelize.transaction(async (t) => {
@@ -82,11 +108,41 @@ const UserController = new class UserController {
                     transaction: t
                 })
                 
-                if (existing) throw new Error('Occupied Name/Email')
+                if (existing) {
+                    const passwordOk = await existing.webAccount.checkPassword(password)
+                    if (passwordOk) {
+                        const existingGU = await GroupUser.findOne({
+                            where: { userId: existing.id, groupId: invite.groupId },
+                            transaction: t
+                        })
+
+                        if (!existingGU) {
+                            let groupUserExpiresAt = null
+                            if (invite.isTemporary && invite.durationMinutes > 0) {
+                                groupUserExpiresAt = new Date(Date.now() + invite.durationMinutes * 60000)
+                            }
+                            await GroupUser.create({
+                                userId: existing.id,
+                                groupId: invite.groupId,
+                                name: displayName || existing.name,
+                                avatar: savedAvatar || null,
+                                expiresAt: groupUserExpiresAt,
+                                role: 0
+                            }, { transaction: t })
+                        }
+
+                        invite.usedById = existing.id
+                        invite.used = true
+                        await invite.save({ transaction: t })
+                        return existing
+                    } else {
+                        throw new Error('Аккаунт с таким Email уже существует. Если это вы, введите верный пароль или перейдите ко входу.')
+                    }
+                }
                 
                 const newUser = await User.create(
                   {
-                    name: name || username || 'Пользователь',
+                    name: displayName,
                     webAccount: { email, password },
                   },
                   {
@@ -99,17 +155,28 @@ const UserController = new class UserController {
                 invite.used = true
                 await invite.save({ transaction: t })
                 
+                let groupUserExpiresAt = null
+                if (invite.isTemporary && invite.durationMinutes > 0) {
+                    groupUserExpiresAt = new Date(Date.now() + invite.durationMinutes * 60000)
+                }
+
                 await GroupUser.create({
                     userId: newUser.id,
                     groupId: invite.groupId,
-                    name: 'Участник',
+                    name: displayName,
+                    avatar: savedAvatar,
+                    expiresAt: groupUserExpiresAt,
                     role: 0
                 }, { transaction: t })
                 
                 return newUser
             })
             
-            return await AuthController.createSession(user, fingerprint, request.ip)
+            const domain = process.env.COOKIE_DOMAIN?.trim()
+            const domainAttr = (domain && !['.domain.com', 'domain.com', '.cam.lisyak.net', '.localhost'].includes(domain)) ? ` Domain=${domain};` : ''
+            const clearInviteCookies = [`invite=; Path=/;${domainAttr} Secure; HttpOnly; SameSite=Lax; Max-Age=0;`]
+
+            return await AuthController.createSession(user, fingerprint, request.ip, clearInviteCookies)
         } catch (err) {
             return sendJson({ error: err.message }, 400)
         }
@@ -126,7 +193,7 @@ const UserController = new class UserController {
         const includeGroupsReq = fields?.includes('groups') ? [{
             model: Group,
             as: 'groups',
-            through: { attributes: ['id', 'name', 'role', 'avatar', 'createdAt'] }
+            through: { attributes: ['id', 'name', 'role', 'avatar', 'expiresAt', 'createdAt'] }
         }] : []
 
         const includeAccountsReq = fields?.includes('accounts') ? [
@@ -158,6 +225,7 @@ const UserController = new class UserController {
                                 name: g.GroupUser.name,
                                 role: g.GroupUser.role,
                                 avatar: g.GroupUser.avatar,
+                                expiresAt: g.GroupUser.expiresAt,
                                 createdAt: g.GroupUser.createdAt
                             }
                         }))
@@ -195,6 +263,7 @@ const UserController = new class UserController {
                             name: g.GroupUser.name,
                             role: g.GroupUser.role,
                             avatar: g.GroupUser.avatar,
+                            expiresAt: g.GroupUser.expiresAt,
                             createdAt: g.GroupUser.createdAt
                         }
                     }})
