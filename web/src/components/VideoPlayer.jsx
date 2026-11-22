@@ -1,12 +1,32 @@
 import { useEffect, useRef, useState, useCallback, memo } from "react"
 import styles from '../styles'
+import { useVideoRecorder, formatDuration } from '../hooks/useVideoRecorder'
 
-const VideoPlayer = ({ api, ready, groupId, token, url, ptzEndpoint, isMobile }) => {
+const VideoPlayer = ({ api, ready, groupId, token, url, ptzEndpoint, isMobile, cameraName }) => {
   const hlsRef = useRef(null);
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   /* re-rendering fix */
   const tokenRef = useRef(token);
+
+  const {
+    isRecording,
+    isSaving,
+    recordingDuration,
+    notice,
+    startRecording,
+    stopRecording,
+  } = useVideoRecorder();
+
+  const handleToggleRecord = useCallback(async (e) => {
+    e?.stopPropagation();
+    if (isSaving) return;
+    if (isRecording) {
+      await stopRecording(null, true);
+    } else {
+      startRecording(videoRef.current, cameraName || `Camera_${groupId}`);
+    }
+  }, [isRecording, isSaving, stopRecording, startRecording, cameraName, groupId]);
 
   const [ isPlaying, setIsPlaying ] = useState(false);
   const [ hasAudio, setHasAudio ] = useState(false);
@@ -671,7 +691,7 @@ const VideoPlayer = ({ api, ready, groupId, token, url, ptzEndpoint, isMobile })
   return (
     <div ref={containerRef} style={containerStyle}>
       <div style={wrapperStyle}>
-        <video ref={videoRef} muted={isMuted} playsInline style={videoStyles} />
+        <video ref={videoRef} muted={isMuted} playsInline crossOrigin="anonymous" style={videoStyles} />
         
         {(!ready || isLoading || autoplayBlocked) && (
           <div style={styles.videoOverlay}>
@@ -691,9 +711,28 @@ const VideoPlayer = ({ api, ready, groupId, token, url, ptzEndpoint, isMobile })
           </div>
         )}
         
-        <div style={styles.videoLatency}>
-          Задержка: {latency} сек
+        <div style={styles.videoTopBadges}>
+          <div style={styles.videoLatencyBadge}>
+            Задержка: {latency} сек
+          </div>
+          {isRecording && (
+            <button
+              type="button"
+              onClick={handleToggleRecord}
+              style={styles.recordingBadge}
+              title="Нажмите, чтобы остановить и сохранить запись"
+            >
+              <span style={styles.recordingDot} />
+              <span>REC {formatDuration(recordingDuration)}</span>
+            </button>
+          )}
         </div>
+
+        {notice && (
+          <div style={styles.videoNoticeToast}>
+            {notice}
+          </div>
+        )}
 
         {transform.scale > 1 && (
           <button
@@ -713,6 +752,20 @@ const VideoPlayer = ({ api, ready, groupId, token, url, ptzEndpoint, isMobile })
             </button>
             <button onClick={toggleMute} style={{ ...styles.videoControlButton, ...(!hasAudio ? { opacity: 0.5 } : {}) }} title={isMuted ? "Включить звук" : "Выключить звук"}>
               {isMuted ? <VolumeXIcon /> : <Volume2Icon />}
+            </button>
+            <button
+              type="button"
+              onClick={handleToggleRecord}
+              disabled={isSaving}
+              style={{
+                ...styles.videoControlButton,
+                opacity: isRecording ? 1 : 0.45,
+                ...(isRecording ? { color: '#f56565' } : {}),
+                ...(isSaving ? { opacity: 0.35, cursor: 'not-allowed' } : {}),
+              }}
+              title={isSaving ? "Сохранение записи..." : (isRecording ? "Остановить запись" : "Начать запись камеры")}
+            >
+              <RecordIcon isRecording={isRecording} isSaving={isSaving} />
             </button>
           </div>
           <div style={styles.videoControlsGroup}>
@@ -790,6 +843,19 @@ const FitScreenIcon = () => (
     <polyline points="20 10 14 10 14 4"></polyline>
     <line x1="14" y1="10" x2="21" y2="3"></line>
     <line x1="3" y1="21" x2="10" y2="14"></line>
+  </svg>
+);
+
+const RecordIcon = ({ isRecording, isSaving }) => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    {isRecording ? (
+      <rect x="6" y="6" width="12" height="12" rx="2" fill="#f56565" stroke="#f56565" />
+    ) : (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <circle cx="12" cy="12" r="4" fill={isSaving ? "#ecc94b" : "currentColor"} stroke={isSaving ? "#ecc94b" : "currentColor"} />
+      </>
+    )}
   </svg>
 );
 

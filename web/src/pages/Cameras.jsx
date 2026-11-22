@@ -93,7 +93,7 @@ export default function Cameras({ cameras, group, api, isMobile }) {
                         const ptz = cam.media?.find(x => x.type === 'ptz') ? `cameras/${cam.id}/ptz` : null;
                         return (
                             <div key={id} style={styles.mobileCameraItem}>
-                                <VideoPlayer api={api} ready={cam.ready} groupId={group} token={cam.token} url={source?.url} ptzEndpoint={ptz} isMobile={isMobile} />
+                                <VideoPlayer api={api} ready={cam.ready} groupId={group} token={cam.token} url={source?.url} ptzEndpoint={ptz} isMobile={isMobile} cameraName={cam.name} />
                             </div>
                         );
                     })}
@@ -107,7 +107,7 @@ export default function Cameras({ cameras, group, api, isMobile }) {
                         const ptz = cam.media?.find(x => x.type === 'ptz') ? `cameras/${cam.id}/ptz` : null;
                         return (
                            <div key={id} style={styles.cameraGridItem}>
-                                <VideoPlayer api={api} ready={cam.ready} groupId={group} token={cam.token} url={source?.url} ptzEndpoint={ptz} isMobile={isMobile} />
+                                <VideoPlayer api={api} ready={cam.ready} groupId={group} token={cam.token} url={source?.url} ptzEndpoint={ptz} isMobile={isMobile} cameraName={cam.name} />
                             </div>
                         );
                     })}
