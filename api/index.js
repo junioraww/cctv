@@ -242,6 +242,8 @@ const apiServer = serve({
         return nginxHandler(request)
     },
     websocket: {
+        idleTimeout: 120,
+        sendPings: true,
         open(ws) {
             console.log(`[WS] Client connected: user ${ws.data?.userId}, session ${ws.data?.sessionId}`)
             registerWsSocket(ws)

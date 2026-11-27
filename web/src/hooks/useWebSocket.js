@@ -69,7 +69,7 @@ export default function useWebSocket({ token, groupId, onCameraStatus, onMemberU
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'ping' }))
           }
-        }, 15000)
+        }, 10000)
       }
 
       ws.onmessage = (event) => {
@@ -151,6 +151,22 @@ export default function useWebSocket({ token, groupId, onCameraStatus, onMemberU
       isConnectingRef.current = false
     }
   }, [ token, connect ])
+
+  // Send an immediate ping or reconnect when tab returns to foreground
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible' || !tokenRef.current) return
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({ type: 'ping' }))
+        } catch (e) {}
+      } else if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+        connect()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [ connect ])
 
   // Cleanup on unmount
   useEffect(() => {
