@@ -1,4 +1,6 @@
 import { Sequelize, Op } from '@sequelize/core'
+import fs from 'node:fs'
+import path from 'node:path'
 import User from '../db/models/User'
 import Session from '../db/models/Session'
 import Invite from '../db/models/Invite'
@@ -9,11 +11,15 @@ import sequelize from '../db/index'
 import redis from '../utils/redis'
 import { broadcastToGroup } from '../utils/ws'
 
-function validateAndSanitizeConfig(config, alwaysReady = false) {
+const TIMELAPSE_BASE_DIR = fs.existsSync('/timelapse') ? '/timelapse' : path.resolve(process.cwd(), '../timelapse')
+
+function validateAndSanitizeConfig(config, alwaysReady = false, timelapse = false) {
     if (!config || typeof config !== 'string') {
         throw new Error('Config must be a non-empty string')
     }
     const trimmed = config.trim()
+    const timelapseCmd = '/bin/sh /timelapse/timelapse.sh'
+
     // Direct stream URL (RTSP / RTMP / HTTP with query params allowed)
     if (/^(rtsp|rtsps|rtmp|rtmps|http|https):\/\/[^\s"';`|\\]+$/i.test(trimmed)) {
         return {
@@ -22,7 +28,9 @@ function validateAndSanitizeConfig(config, alwaysReady = false) {
             ...(alwaysReady ? {} : {
                 sourceOnDemandStartTimeout: "10s",
                 sourceOnDemandCloseAfter: "10s"
-            })
+            }),
+            runOnInit: timelapse ? timelapseCmd : '',
+            runOnInitRestart: Boolean(timelapse)
         }
     }
     // FFmpeg command - strictly disallow shell chaining & subshells, allow $MTX_PATH
@@ -32,7 +40,7 @@ function validateAndSanitizeConfig(config, alwaysReady = false) {
         }
         if (alwaysReady) {
             return {
-                runOnInit: trimmed,
+                runOnInit: timelapse ? `${timelapseCmd} & ${trimmed}` : trimmed,
                 runOnInitRestart: true,
                 runOnDemand: ""
             }
@@ -41,7 +49,8 @@ function validateAndSanitizeConfig(config, alwaysReady = false) {
                 runOnDemand: trimmed,
                 runOnDemandStartTimeout: "10s",
                 runOnDemandCloseAfter: "10s",
-                runOnInit: ""
+                runOnInit: timelapse ? timelapseCmd : '',
+                runOnInitRestart: Boolean(timelapse)
             }
         }
     }
@@ -96,6 +105,7 @@ const CameraController = new class CameraController {
                 name: x.name,
                 media: x.media,
                 alwaysReady: Boolean(x.alwaysReady),
+                timelapse: Boolean(x.timelapse),
                 config: canAccessConfigData ? x.config : null
             }
         })
@@ -109,11 +119,12 @@ const CameraController = new class CameraController {
     async create(request, args) {
         if(request.access !== "ALL") return sendJson({ error: 'No Access' }, 403)
         try {
-            const { groupId, name, config, alwaysReady } = await request.json()
+            const { groupId, name, config, alwaysReady, timelapse } = await request.json()
             if (!groupId || !name || !config) return sendJson({ error: 'Missing required fields' }, 400)
             
             const isAlwaysReady = Boolean(alwaysReady)
-            const mediaConfig = validateAndSanitizeConfig(config, isAlwaysReady)
+            const isTimelapse = Boolean(timelapse)
+            const mediaConfig = validateAndSanitizeConfig(config, isAlwaysReady, isTimelapse)
             
             // TODO поддержка dash, webrtc
             const media = JSON.stringify([
@@ -128,11 +139,17 @@ const CameraController = new class CameraController {
                 media,
                 config: config.trim(),
                 alwaysReady: isAlwaysReady,
+                timelapse: isTimelapse,
                 groupId: Number(groupId)
             })
             
             const mediaName = groupId + '/' + camera.id
-            await addOrUpdateCamera({ name: mediaName, config: camera.config, alwaysReady: camera.alwaysReady })
+            await addOrUpdateCamera({
+                name: mediaName,
+                config: camera.config,
+                alwaysReady: camera.alwaysReady,
+                timelapse: camera.timelapse
+            })
             
             return sendJson(camera.dataValues)
         } catch (err) {
@@ -150,6 +167,9 @@ const CameraController = new class CameraController {
             if (body.alwaysReady !== undefined) {
                 camera.alwaysReady = Boolean(body.alwaysReady)
             }
+            if (body.timelapse !== undefined) {
+                camera.timelapse = Boolean(body.timelapse)
+            }
             if (body.name !== undefined) {
                 camera.name = String(body.name).trim()
             }
@@ -160,13 +180,70 @@ const CameraController = new class CameraController {
 
             if (camera.group) {
                 const pathName = camera.group.id + '/' + camera.id
-                await addOrUpdateCamera({ name: pathName, config: camera.config, alwaysReady: camera.alwaysReady })
+                await addOrUpdateCamera({
+                    name: pathName,
+                    config: camera.config,
+                    alwaysReady: camera.alwaysReady,
+                    timelapse: camera.timelapse
+                })
             }
 
             return sendJson({ success: true, camera: camera.dataValues })
         } catch (err) {
             return sendJson({ error: err.message }, 400)
         }
+    }
+
+    async getTimelapse(request, [ url, cameraId, subAction ]) {
+        const canAccessAllGroups = request.access === "ALL"
+        const camera = await Camera.findOne({ where: { id: cameraId }, include: 'group' })
+        if (!camera) return sendJson({ error: 'Not Found' }, 404)
+
+        if (!canAccessAllGroups) {
+            const { userId } = request
+            const groupUser = await GroupUser.findOne({
+                where: { userId, groupId: camera.groupId }
+            })
+            if (!groupUser) return sendJson({ error: 'No Access' }, 403)
+            if (groupUser.expiresAt && new Date(groupUser.expiresAt) <= new Date()) {
+                return sendJson({ error: 'Срок действия доступа истек' }, 403)
+            }
+        }
+
+        const pathName = `${camera.group?.id || camera.groupId}/${camera.id}`
+        const dir = path.join(TIMELAPSE_BASE_DIR, pathName)
+
+        if (!fs.existsSync(dir)) {
+            return sendJson({ success: true, count: 0, latest: null, frames: [] })
+        }
+
+        let files = []
+        try {
+            files = fs.readdirSync(dir)
+                .filter(f => f.endsWith('.jpg') && !f.startsWith('.'))
+                .sort()
+                .reverse()
+        } catch (e) {
+            return sendJson({ error: 'Failed to read directory' }, 500)
+        }
+
+        if (subAction === 'latest-image' && files.length > 0) {
+            const filePath = path.join(dir, files[0])
+            const fileData = fs.readFileSync(filePath)
+            return new Response(fileData, {
+                headers: {
+                    'Content-Type': 'image/jpeg',
+                    'Content-Disposition': `inline; filename="${files[0]}"`
+                }
+            })
+        }
+
+        return sendJson({
+            success: true,
+            count: files.length,
+            latest: files[0] || null,
+            frames: files.slice(0, 50)
+        })
     }
     
     async delete(request, id) {
@@ -259,7 +336,12 @@ const initMedia = async() => {
         for (const cam of dbCameras) {
             const pathName = cam.group.id + '/' + cam.id
             dbCameraMap.set(pathName, cam)
-            await addOrUpdateCamera({ name: pathName, config: cam.config, alwaysReady: cam.alwaysReady })
+            await addOrUpdateCamera({
+                name: pathName,
+                config: cam.config,
+                alwaysReady: cam.alwaysReady,
+                timelapse: cam.timelapse
+            })
         }
         
         // Remove orphan paths in MediaMTX that are not in DB
@@ -275,7 +357,7 @@ const initMedia = async() => {
 
 const addOrUpdateCamera = async camera => {
     try {
-        const mediaConfig = validateAndSanitizeConfig(camera.config, camera.alwaysReady)
+        const mediaConfig = validateAndSanitizeConfig(camera.config, camera.alwaysReady, camera.timelapse)
         const encodedName = encodeURIComponent(camera.name)
         const body = {
             name: camera.name,

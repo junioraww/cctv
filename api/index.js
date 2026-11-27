@@ -134,6 +134,7 @@ function nginxHandler(request) {
         }
         else if (arg[1] === 'cameras') {
             if(!arg[3]) return authenticate(request, [ url, arg[2] ], CameraController.get)
+            if (arg[3] === 'timelapse') return authenticate(request, [ url, Number(arg[2]), arg[4] ], CameraController.getTimelapse)
         }
         else if (arg[1] === 'sessions') {
             if(!arg[2]) return authenticate(request, url, SessionController.get)

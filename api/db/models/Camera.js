@@ -8,6 +8,7 @@ export default class Camera extends Model {
       config: { type: DataTypes.STRING, allowNull: false },
       name: { type: DataTypes.STRING, allowNull: false },
       alwaysReady: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
+      timelapse: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
 		}, {
 			sequelize,
 			modelName: 'Camera',

@@ -292,6 +292,11 @@ const AuthController = new class AuthController {
             
             // Allow publishing from internal network (MediaMTX source / ffmpeg)
             if (data.action === "publish") return new Response("", { status: 200 })
+
+            // Allow local loopback reading inside MediaMTX container (e.g. timelapse ffmpeg)
+            if (data.action === "read" && (data.ip === "127.0.0.1" || data.ip === "::1")) {
+                return new Response("", { status: 200 })
+            }
             
             const token = data.token || (data.query ? new URLSearchParams(data.query).get('token') : null)
             if (!token || typeof token !== 'string') return new Response("", { status: 403 })

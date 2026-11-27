@@ -3,6 +3,7 @@ import request from '../utils/request'
 import { generate } from '../utils/qrController'
 import { parseCameraInput } from '../utils/cameraPresets'
 import fs from 'fs'
+import path from 'path'
 
 const ADMIN_ID = +process.env.ADMIN_ID
 
@@ -96,22 +97,47 @@ async function openCamera(ctx, groupId, cameraId) {
     if (!response?.success || !response.camera) return ctx.reply("❌ Ошибка при получении данных камеры!")
     const camera = response.camera
     const isAlwaysReady = Boolean(camera.alwaysReady)
+    const isTimelapse = Boolean(camera.timelapse)
+
+    const timelapseRes = await request("cameras/" + cameraId + "/timelapse", { method: 'GET' }).catch(() => null)
+    const timelapseCount = timelapseRes?.count || 0
+    const latestFrameTime = timelapseRes?.latest
+        ? timelapseRes.latest.replace('.jpg', '').replace('_', ' ')
+        : null
 
     const statusBadge = isAlwaysReady ? '🟢 ВКЛ (Постоянный поток)' : '⚪ ВЫКЛ (По запросу)'
     const toggleBtnText = isAlwaysReady ? '🔴 Выключить постоянный поток' : '🟢 Включить постоянный поток'
+
+    const timelapseBadge = isTimelapse ? '🟢 ВКЛ (1 кадр/час в :00:00)' : '⚪ ВЫКЛ'
+    const toggleTimelapseBtnText = isTimelapse ? '⏱ Выключить таймлапс' : '⏱ Включить таймлапс (1 кадр/час)'
 
     const text = `📹 <b>Камера: ${camera.name}</b>\n\n`
       + `<b>Источник:</b> <code>${camera.config}</code>\n\n`
       + `⚡ <b>Режим готовности:</b> ${statusBadge}\n`
       + (isAlwaysReady
-          ? '<i>Камера подключена к серверу 24/7. Поток отдается моментально без задержек на прогрев.</i>'
-          : '<i>Камера подключается только при входе зрителей на сайт. Экономит трафик и ресурсы.</i>')
+          ? '<i>Камера подключена к серверу 24/7. Поток отдается моментально без задержек на прогрев.</i>\n\n'
+          : '<i>Камера подключается только при входе зрителей на сайт. Экономит трафик и ресурсы.</i>\n\n')
+      + `⏱ <b>Таймлапс:</b> ${timelapseBadge}\n`
+      + (isTimelapse
+          ? `<i>Запись 1 кадра в час в :00:00 через MediaMTX.</i>\n`
+            + (timelapseCount > 0
+                ? `📁 <b>Кадров в архиве:</b> ${timelapseCount} шт.` + (latestFrameTime ? `\n🕒 <b>Последний:</b> <code>${latestFrameTime}</code>` : '')
+                : '<i>Ожидается первый снимок...</i>')
+          : (timelapseCount > 0
+              ? `📁 <b>Кадров в архиве:</b> ${timelapseCount} шт.`
+              : '<i>Покадровая запись отключена.</i>'))
 
-    const keyboard = Panel().Text(text)
+    const panel = Panel().Text(text)
         .Callback(toggleBtnText, "toggleAlwaysReady", +groupId, +cameraId, isAlwaysReady ? 0 : 1).Row()
-        .Callback("➖ Удалить камеру", "deleteCamera", +groupId, +cameraId).Row()
+        .Callback(toggleTimelapseBtnText, "toggleTimelapse", +groupId, +cameraId, isTimelapse ? 0 : 1).Row()
+
+    if (timelapseCount > 0) {
+        panel.Callback("🖼 Отправить последний кадр", "sendLatestTimelapse", +groupId, +cameraId).Row()
+    }
+
+    panel.Callback("➖ Удалить камеру", "deleteCamera", +groupId, +cameraId).Row()
         .Callback("Обратно", "listCameras", +groupId)
-    return ctx.open(keyboard)
+    return ctx.open(panel)
 }
 
 async function toggleAlwaysReady(ctx, groupId, cameraId, targetState) {
@@ -122,6 +148,39 @@ async function toggleAlwaysReady(ctx, groupId, cameraId, targetState) {
         body: { alwaysReady: isReady }
     })
     return openCamera(ctx, groupId, cameraId)
+}
+
+async function toggleTimelapse(ctx, groupId, cameraId, targetState) {
+    if (!isAdmin(ctx)) return;
+    const isTimelapse = Number(targetState) === 1
+    await request("cameras/" + cameraId, {
+        method: 'PATCH',
+        body: { timelapse: isTimelapse }
+    })
+    return openCamera(ctx, groupId, cameraId)
+}
+
+async function sendLatestTimelapse(ctx, groupId, cameraId) {
+    if (!isAdmin(ctx)) return;
+    try {
+        const localDir = fs.existsSync('/timelapse') ? '/timelapse' : path.resolve(process.cwd(), '../timelapse')
+        const camDir = path.join(localDir, `${groupId}/${cameraId}`)
+        if (fs.existsSync(camDir)) {
+            const files = fs.readdirSync(camDir).filter(f => f.endsWith('.jpg') && !f.startsWith('.')).sort().reverse()
+            if (files.length > 0) {
+                const filePath = path.join(camDir, files[0])
+                const readableDate = files[0].replace('.jpg', '').replace('_', ' ')
+                return ctx.reply({
+                    text: `🖼 <b>Последний снимок таймлапса</b>\nКамера ID: ${cameraId}\nВремя: <code>${readableDate}</code>`,
+                    ...Image(filePath)
+                })
+            }
+        }
+        return ctx.reply("❌ В архиве таймлапса пока нет снимков.")
+    } catch (err) {
+        console.error('[Bot] sendLatestTimelapse error:', err)
+        return ctx.reply("❌ Не удалось отправить снимок.")
+    }
 }
 
 const cancel = ctx => {
@@ -244,7 +303,7 @@ const adminDashboard = ctx => ctx.open(dashboard)
 export default {
   init: bot => {
     bot.register(adminDashboard, openGroup, createGroup, createGroupFin, chooseInviteType, chooseTempDuration,
-    createInvitePermanent, createInviteTemp, listCameras, createCamera, openCamera, toggleAlwaysReady,
-    createCameraSetName, createCameraSetConfig, deleteCamera)
+    createInvitePermanent, createInviteTemp, listCameras, createCamera, openCamera, toggleAlwaysReady, toggleTimelapse,
+    sendLatestTimelapse, createCameraSetName, createCameraSetConfig, deleteCamera)
   }
 }

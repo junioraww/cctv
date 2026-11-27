@@ -6,6 +6,7 @@ services:
     working_dir: /app
     volumes:
       - ./api:/app
+      - ./timelapse:/timelapse
       - avatars_data:/var/www/html/avatars
     command: bun run --watch index.js
     environment:
@@ -36,6 +37,7 @@ services:
     working_dir: /app
     volumes:
       - ./bot:/app
+      - ./timelapse:/timelapse
     command: bun run --watch index.js
     environment:
       - API_ROOT=${BOT_API_ROOT}
